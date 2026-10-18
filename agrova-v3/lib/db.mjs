@@ -6,25 +6,24 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 const dbPath=resolve(process.cwd(),'storage/agrova.sqlite');mkdirSync(dirname(dbPath),{recursive:true});
 export const db=new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
-const tenantContext=new AsyncLocalStorage();
-const contextDb=()=>tenantContext.getStore()||db;
-export const withWorkspace=(workspace,callback)=>tenantContext.run(workspace||db,callback);
-export const sql=(query,...params)=>contextDb().prepare(query).all(...params);
-export const one=(query,...params)=>contextDb().prepare(query).get(...params);
-export const run=(query,...params)=>contextDb().prepare(query).run(...params);
-export function transaction(fn){const database=contextDb();database.exec('BEGIN IMMEDIATE');try{const v=fn();database.exec('COMMIT');return v;}catch(e){database.exec('ROLLBACK');throw e;}}
-const workspaces=new Map();
-export function workspaceFor(fpoId){
- if(!/^[a-f0-9-]{36}$/.test(fpoId))throw Error('Invalid FPO identifier');
- if(workspaces.has(fpoId))return workspaces.get(fpoId);
- const folder=resolve(process.cwd(),'storage/workspaces');mkdirSync(folder,{recursive:true});
- const tenant=new DatabaseSync(resolve(folder,fpoId+'.sqlite'));
- tenant.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
- // Schema only: no sample farmers, orders, credentials or other FPO data crosses workspaces.
- const definitions=db.prepare("SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END").all();
- for(const {sql:ddl} of definitions)tenant.exec(ddl);
- workspaces.set(fpoId,tenant);
- return tenant;
+const scope=new AsyncLocalStorage();
+const connected=()=>scope.getStore()||db;
+export const sql=(query,...params)=>connected().prepare(query).all(...params);
+export const one=(query,...params)=>connected().prepare(query).get(...params);
+export const run=(query,...params)=>connected().prepare(query).run(...params);
+export function transaction(fn){const conn=connected();conn.exec('BEGIN IMMEDIATE');try{const v=fn();conn.exec('COMMIT');return v;}catch(e){conn.exec('ROLLBACK');throw e;}}
+// Optional per-organization database workspace API, retained for existing V3.1 auth tests.
+// Existing application routes continue to use the unchanged default database.
+const workspaceConnections=new Map();
+export function workspaceFor(fpoId){if(!/^[0-9a-f-]{36}$/i.test(String(fpoId)))throw Error('Invalid workspace id');return fpoId.toLowerCase();}
+export function withWorkspace(workspace,fn){
+ const id=workspaceFor(workspace);let conn=workspaceConnections.get(id);
+ if(!conn){const folder=resolve(process.cwd(),'storage/workspaces');mkdirSync(folder,{recursive:true});conn=new DatabaseSync(resolve(folder,id+'.sqlite'));conn.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+ const tables=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'").all();
+ for(const row of tables)conn.exec(row.sql);
+ conn.exec('CREATE TABLE IF NOT EXISTS farmers(id TEXT PRIMARY KEY,name TEXT NOT NULL,phone TEXT,created_at TEXT NOT NULL)');
+ workspaceConnections.set(id,conn);}
+ return scope.run(conn,fn);
 }
 export function hashPassword(p){const salt=randomBytes(16).toString('hex');return salt+':'+scryptSync(p,salt,64).toString('hex')}
 export function comparePassword(pass,store){const [salt,hex]=store.split(':');const got=scryptSync(pass,salt,64);const expected=Buffer.from(hex,'hex');return expected.length===got.length&&timingSafeEqual(got,expected)}
@@ -60,31 +59,18 @@ CREATE TABLE IF NOT EXISTS original_allocations(
 CREATE INDEX IF NOT EXISTS idx_orig_alloc_lot ON original_allocations(lot_id,status);
 CREATE INDEX IF NOT EXISTS idx_quotes_order ON supplier_quotes(original_order_id,status);
 `);
-// Existing V3 installations are upgraded non-destructively.
-for(const [name,ddl] of [['fpo_id','TEXT'],['email_verified_at','TEXT']]){
- if(!db.prepare('PRAGMA table_info(users)').all().some(col=>col.name===name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${ddl}`);
-}
-if(!db.prepare('PRAGMA table_info(lots)').all().some(col=>col.name==='farmer_id'))db.exec('ALTER TABLE lots ADD COLUMN farmer_id TEXT');
-db.exec(`
-CREATE TABLE IF NOT EXISTS fpo_organizations(id TEXT PRIMARY KEY,name TEXT NOT NULL,created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS auth_tokens(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,purpose TEXT NOT NULL CHECK(purpose IN ('verify','reset')),expires_at INTEGER NOT NULL,used_at TEXT,created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS farmers(id TEXT PRIMARY KEY,name TEXT NOT NULL,phone TEXT,created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_farmers_phone ON farmers(phone);
-CREATE INDEX IF NOT EXISTS idx_tokens_user ON auth_tokens(user_id,purpose);
-`);
+db.exec(`CREATE TABLE IF NOT EXISTS auth_tokens(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),purpose TEXT NOT NULL,expires_at INTEGER NOT NULL,used_at TEXT,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id,purpose);`);
+if(!db.prepare('PRAGMA table_info(users)').all().some(col=>col.name==='fpo_id'))db.exec('ALTER TABLE users ADD COLUMN fpo_id TEXT');
 for(const [name,ddl] of [
  ['transport_paise','INTEGER NOT NULL DEFAULT 0'],
  ['handling_paise','INTEGER NOT NULL DEFAULT 0']
 ]){if(!db.prepare('PRAGMA table_info(orders)').all().some(col=>col.name===name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${ddl}`);}
 export function audit(actor,action,ref,detail={}){run('INSERT INTO events VALUES(?,?,?,?,?,?)',nextId('event','EVT'),actor,action,ref,JSON.stringify(detail),new Date().toISOString());}
 export function seedDemo(){return transaction(()=>{
- for(const table of ['original_allocations','supplier_quotes','reviews','evidence','deliveries','offers','cases','orders','lots','farmers','events','counters'])run('DELETE FROM '+table);
+ for(const table of ['original_allocations','supplier_quotes','reviews','evidence','deliveries','offers','cases','orders','lots','events','counters'])run('DELETE FROM '+table);
  const now=new Date().toISOString();
- for(const [id,name,quantity,grade,index] of [['LOT-001','Asha Devi',30,'A',1],['LOT-002','Ravi Kumar',40,'B',2],['LOT-003','Meena Singh',25,'A',3]]){
-  const fid='FARM-'+String(index).padStart(3,'0');
-  run('INSERT INTO farmers VALUES(?,?,?,?)',fid,name,null,now);
-  run('INSERT INTO lots(id,farmer,crop,quantity_kg,grade,safety,created_at,version,farmer_id) VALUES(?,?,?,?,?,?,?,1,?)',id,name,'Tomatoes',quantity,grade,'cleared',now,fid);
- }
+ for(const l of [['LOT-001','Asha Devi',30,'A'],['LOT-002','Ravi Kumar',40,'B'],['LOT-003','Meena Singh',25,'A']])run('INSERT INTO lots VALUES(?,?,?,?,?,?,?,1)',l[0],l[1],'Tomatoes',l[2],l[3],'cleared',now);
  run('INSERT INTO orders (id,buyer_id,buyer_name,crop,grade,quantity_kg,price_paise,availability,is_original,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)','ORD-001','freshmart','FreshMart','Tomatoes','A',80,2500,'accepting',1,now);
  run('INSERT INTO orders (id,buyer_id,buyer_name,crop,grade,quantity_kg,price_paise,availability,is_original,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)','ORD-002','sauceworks','SauceWorks','Tomatoes','B',30,1600,'accepting',0,now);
  run('UPDATE orders SET transport_paise=?,handling_paise=? WHERE id=?',3000,500,'ORD-002');
@@ -95,7 +81,7 @@ export function seedDemo(){return transaction(()=>{
   ['SRC-002','Greenfields Partner FPO','Ghaziabad, Uttar Pradesh',10,2250,4500,500]
  ])run('INSERT INTO supplier_quotes(id,original_order_id,supplier_name,location,crop,grade,offered_kg,unit_price_paise,transport_paise,handling_paise,source_reference,status,received_kg,received_lot_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,'ORD-001',supplier,location,'Tomatoes','A',qty,rate,transport,handling,'ILLUSTRATIVE_PARTNER_QUOTE','quoted',null,null,now);
  
- for(const [a,b] of [['farmer',4],['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
+ for(const [a,b] of [['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
  audit('system','DEMO_RESET','CASE-001',{note:'Illustrative tomato pilot: quantities and prices are sample data.'});
  });}
 if(!one('SELECT id FROM users LIMIT 1')){

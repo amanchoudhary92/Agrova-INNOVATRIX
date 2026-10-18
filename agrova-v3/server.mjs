@@ -1,10 +1,10 @@
 import http from 'node:http';
+import {marketRoute} from './lib/marketplace.mjs';
 import {readFile,writeFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
-import {join,resolve,extname,relative,isAbsolute,sep} from 'node:path';
+import {join,resolve,extname} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {sendAccountEmail,validEmail,validPassword,issueToken,redeemToken,authLimit} from './lib/auth.mjs';
-import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash,hashPassword,withWorkspace,workspaceFor} from './lib/db.mjs';
+import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash} from './lib/db.mjs';
 import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract} from './lib/domain.mjs';
 import {freeQuantity,orderCoverage,netRecovery,qualityCheck} from './lib/v3.mjs';
 const publicDir=resolve('public');const storageDir=resolve('storage');
@@ -20,7 +20,7 @@ const coverage=o=>orderCoverage(o,sql('SELECT * FROM lots'),sql('SELECT * FROM o
 
 function reply(res,status,data,headers={}){const body=JSON.stringify(data);res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers});res.end(body)}
 async function bodyJson(req){let chunks=[];let size=0;for await (const chunk of req){size+=chunk.length;ensure(size<=8500000,'Request too large (5 MB upload limit).',413);chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString()||'{}')}catch{throw error('Invalid JSON payload.')}}
-function loggedIn(req){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('agrova_session='))?.split('=')[1];if(!token)return null;const s=one('SELECT u.id,u.username,u.display_name,u.role,u.buyer_id,u.fpo_id,org.name AS fpo_name FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN fpo_organizations org ON org.id=u.fpo_id WHERE s.token_hash=? AND s.expires_at>?',tokenHash(token),Date.now());return s||null;}
+function loggedIn(req){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('agrova_session='))?.split('=')[1];if(!token)return null;const s=one('SELECT u.id,u.username,u.display_name,u.role,u.buyer_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?',tokenHash(token),Date.now());return s||null;}
 const requireUser=(user)=>{ensure(user,'Sign in to continue.',401);return user};
 const manager=(user)=>{requireUser(user);ensure(user.role==='manager','FPO manager access required.',403);return user;};
 const canViewDelivery=(user,d)=>{manager(user);return d};
@@ -44,7 +44,7 @@ function bootstrap(user){requireUser(user);
  const orders=user.role==='buyer'?sql('SELECT * FROM orders WHERE buyer_id=? ORDER BY id',user.buyer_id):sql('SELECT * FROM orders ORDER BY id');
  const offers=user.role==='buyer'?sql('SELECT ofr.* FROM offers ofr JOIN orders o ON o.id=ofr.order_id WHERE o.buyer_id=? ORDER BY ofr.created_at DESC,ofr.id DESC',user.buyer_id):sql('SELECT * FROM offers ORDER BY created_at DESC,id DESC');
  if(user.role==='buyer')return {user,orders,offers,events:[],server_time:now()};
- return {user,version:'3.1',is_demo:!user.fpo_id,farmers:sql('SELECT * FROM farmers ORDER BY name'),suppliers:sql('SELECT * FROM supplier_quotes ORDER BY created_at,id'),original_allocations:sql('SELECT * FROM original_allocations ORDER BY id'),lots:sql('SELECT * FROM lots ORDER BY id'),orders,cases:sql('SELECT * FROM cases ORDER BY id'),offers,deliveries:sql('SELECT * FROM deliveries ORDER BY created_at DESC,id DESC').map(breakdown),events:sql('SELECT e.*,coalesce(u.display_name,e.actor_id) actor_name FROM events e LEFT JOIN users u ON u.id=e.actor_id ORDER BY e.created_at DESC,e.id DESC LIMIT 100'),server_time:now(),ai_enabled:!!process.env.GEMINI_API_KEY};
+ return {user,version:'3.0',suppliers:sql('SELECT * FROM supplier_quotes ORDER BY created_at,id'),original_allocations:sql('SELECT * FROM original_allocations ORDER BY id'),lots:sql('SELECT * FROM lots ORDER BY id'),orders,cases:sql('SELECT * FROM cases ORDER BY id'),offers,deliveries:sql('SELECT * FROM deliveries ORDER BY created_at DESC,id DESC').map(breakdown),events:sql('SELECT e.*,coalesce(u.display_name,e.actor_id) actor_name FROM events e LEFT JOIN users u ON u.id=e.actor_id ORDER BY e.created_at DESC,e.id DESC LIMIT 100'),server_time:now(),ai_enabled:!!process.env.GEMINI_API_KEY};
 }
 function cleanExtract(data){const n=(v,max=10000000)=>{if(v==null||v==='')return null;const x=Number(v);return Number.isFinite(x)&&x>=0&&x<=max?x:null};return {lot_ref:typeof data?.lot_ref==='string'?data.lot_ref.slice(0,50):null,delivered_kg:n(data?.delivered_kg),accepted_kg:n(data?.accepted_kg),rejected_kg:n(data?.rejected_kg),rate_inr:n(data?.rate_inr),deductions_inr:n(data?.deductions_inr),document_date:typeof data?.document_date==='string'?data.document_date.slice(0,40):null,source_reference:typeof data?.source_reference==='string'?data.source_reference.slice(0,220):null};}
 async function extractEvidence(record){
@@ -60,60 +60,17 @@ async function extractEvidence(record){
   return {engine:'gemini',fields:cleanExtract(JSON.parse(text))};
  }finally{clearTimeout(timeout)}
 }
-async function handle(req,res){
- const user=loggedIn(req); // Always read identity sessions from the global identity database.
- const pathname=new URL(req.url,'http://localhost').pathname;
- const workspace=pathname.startsWith('/api/auth/')?null:(user?.fpo_id?workspaceFor(user.fpo_id):null);
- return withWorkspace(workspace,()=>handleWorkspace(req,res,user));
-}
-async function handleWorkspace(req,res,user){const url=new URL(req.url,'http://localhost');const path=url.pathname;const method=req.method||'GET';
+async function handle(req,res){const url=new URL(req.url,'http://localhost');const path=url.pathname;const method=req.method||'GET';const user=loggedIn(req);
  try{
  if(method!=='GET'&&req.headers.origin){const origin=new URL(req.headers.origin);ensure(origin.host===req.headers.host,'Cross-origin write requests are not allowed.',403);}
- if(path==='/api/health')return reply(res,200,{ok:true,app:'Agrova V3.1',server_time:now()});
- if(path==='/api/auth/register'&&method==='POST'){
-  authLimit(req,'register');const b=await bodyJson(req);
-  const email=validEmail(b.email),orgName=str(b.fpo_name,120),managerName=str(b.manager_name,100),password=String(b.password||'');
-  validPassword(password);ensure(password===b.confirm_password,'Passwords do not match.');
-  ensure(!one('SELECT id FROM users WHERE username=?',email),'This email is already registered.',409);
-  const id='USR-'+randomUUID(),fpoId=randomUUID(),created=now();
-  const token=transaction(()=>{
-   run('INSERT INTO fpo_organizations VALUES(?,?,?)',fpoId,orgName,created);
-   run('INSERT INTO users(id,username,password_hash,display_name,role,buyer_id,fpo_id,email_verified_at) VALUES(?,?,?,?,?,?,?,NULL)',id,email,hashPassword(password),managerName,'manager',null,fpoId);
-   return issueToken(id,'verify');
-  });
-  let result;
-  try{result=await sendAccountEmail({kind:'verify',email,token,req})}catch(e){console.error('[Agrova email]',e.message);return reply(res,503,{error:'Account saved but verification email could not be delivered. Configure Resend and use Resend verification, or contact the team.'});}
-  return reply(res,201,{ok:true,email,delivery:result.mode,message:result.mode==='development'?'Local development: verification link printed in your server terminal. No email was sent.':'Verification email sent. Open it before signing in.'});
+ if(path.startsWith('/api/market/')){
+  const params=method==='GET'?Object.fromEntries(url.searchParams):await bodyJson(req);
+  const result=marketRoute(path,method,user,params);
+  if(result){if(result.body){res.writeHead(result.status,{'Cache-Control':'private,no-store','X-Content-Type-Options':'nosniff',...result.headers});res.end(result.body);return;}return reply(res,result.status,result.data);}
  }
- if(path==='/api/auth/verify'&&method==='POST'){
-  authLimit(req,'verify');const b=await bodyJson(req);const token=String(b.token||'');const id=transaction(()=>{
-   const userId=redeemToken(token,'verify');run('UPDATE users SET email_verified_at=? WHERE id=?',now(),userId);return userId;
-  });return reply(res,200,{ok:true,message:'Email verified. You can now sign in.'});
- }
- if(path==='/api/auth/resend'&&method==='POST'){
-  authLimit(req,'resend');const b=await bodyJson(req),email=String(b.email||'').trim().toLowerCase();
-  const account=one('SELECT * FROM users WHERE username=?',email);
-  if(account?.fpo_id&&!account.email_verified_at){
-   const token=transaction(()=>issueToken(account.id,'verify'));
-   try{await sendAccountEmail({kind:'verify',email,token,req});}catch(e){console.error('[Agrova email]',e.message);}
-  }
-  return reply(res,200,{ok:true,message:'If the account needs verification, instructions will be sent when email delivery is configured.'});
- }
- if(path==='/api/auth/forgot'&&method==='POST'){
-  authLimit(req,'forgot');const b=await bodyJson(req);const email=String(b.email||'').trim().toLowerCase();
-  const account=one('SELECT * FROM users WHERE username=?',email);
-  if(account?.fpo_id&&account.email_verified_at){const token=transaction(()=>issueToken(account.id,'reset'));try{await sendAccountEmail({kind:'reset',email,token,req})}catch(e){console.error('[Agrova email]',e.message)}}
-  return reply(res,200,{ok:true,message:'If the account exists, password reset instructions have been requested.'});
- }
- if(path==='/api/auth/reset'&&method==='POST'){
-  authLimit(req,'reset');const b=await bodyJson(req),password=String(b.password||'');validPassword(password);
-  ensure(password===b.confirm_password,'Passwords do not match.');
-  transaction(()=>{const userId=redeemToken(String(b.token||''),'reset');run('UPDATE users SET password_hash=? WHERE id=?',hashPassword(password),userId);run('DELETE FROM sessions WHERE user_id=?',userId);});
-  return reply(res,200,{ok:true,message:'Password updated. Sign in with your new password.'});
- }
+ if(path==='/api/health')return reply(res,200,{ok:true,app:'Agrova V3',server_time:now()});
  if(path==='/api/auth/login'&&method==='POST'){
-  authLimit(req,'login');const b=await bodyJson(req);const account=one('SELECT * FROM users WHERE username=?',String(b.username||'').trim().toLowerCase());ensure(account&&comparePassword(String(b.password||''),account.password_hash),'Invalid email or password.',401);
-  ensure(!account.fpo_id||account.email_verified_at,'Please verify your email before signing in.',403);
+  const b=await bodyJson(req);const account=one('SELECT * FROM users WHERE username=?',String(b.username||'').trim().toLowerCase());ensure(account&&comparePassword(String(b.password||''),account.password_hash),'Invalid email or password.',401);
   const token=randomBytes(32).toString('hex');run('INSERT INTO sessions VALUES(?,?,?)',tokenHash(token),account.id,Date.now()+1000*60*60*12);
   return reply(res,200,{ok:true}, {'Set-Cookie':`agrova_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=43200${process.env.NODE_ENV==='production'?'; Secure':''}`});
  }
@@ -123,21 +80,11 @@ async function handleWorkspace(req,res,user){const url=new URL(req.url,'http://l
  }
  if(path==='/api/bootstrap'&&method==='GET')return reply(res,200,bootstrap(user));
  if(path==='/api/demo/reset'&&method==='POST'){
-  manager(user);ensure(!user.fpo_id,'Reset demo is disabled for real FPO workspaces.',403);seedDemo();audit(user.id,'DEMO_RESET','ALL',{});return reply(res,200,{ok:true});
- }
- if(path==='/api/farmers'&&method==='POST'){
-  manager(user);const b=await bodyJson(req);const name=str(b.name,120),phone=String(b.phone||'').trim();
-  ensure(!phone||/^\+?[0-9]{10,15}$/.test(phone),'Phone must be 10-15 digits (optional).');
-  return reply(res,201,transaction(()=>{const id=nextId('farmer','FARM');run('INSERT INTO farmers VALUES(?,?,?,?)',id,name,phone||null,now());audit(user.id,'FARMER_REGISTERED',id,{name});return {id};}));
+  manager(user);seedDemo();audit(user.id,'DEMO_RESET','ALL',{});return reply(res,200,{ok:true});
  }
  if(path==='/api/lots'&&method==='POST'){
   manager(user);const b=await bodyJson(req);const quantity=finiteKg(b.quantity_kg);const grade=str(b.grade,2);const safety=str(b.safety,10);ensure(allowedGrade.includes(grade)&&allowedSafety.includes(safety),'Invalid grade/safety.');
-  const id=transaction(()=>{
-   const farmerId=String(b.farmer_id||'');let farmerName;
-   if(farmerId){farmerName=row('farmers',farmerId).name;}else{
-    ensure(!user.fpo_id,'Select a registered farmer to create a lot.');farmerName=str(b.farmer);
-   }
-   const id=nextId('lot','LOT');run('INSERT INTO lots(id,farmer,crop,quantity_kg,grade,safety,created_at,version,farmer_id) VALUES(?,?,?,?,?,?,?,1,?)',id,farmerName,str(b.crop),quantity,grade,safety,now(),farmerId||null);audit(user.id,'LOT_CREATED',id,{quantity,grade,safety,farmer_id:farmerId||null});return id;});return reply(res,201,{id});
+  const id=transaction(()=>{const id=nextId('lot','LOT');run('INSERT INTO lots VALUES(?,?,?,?,?,?,?,1)',id,str(b.farmer),str(b.crop),quantity,grade,safety,now());audit(user.id,'LOT_CREATED',id,{quantity,grade,safety});return id;});return reply(res,201,{id});
  }
  let m=path.match(/^\/api\/lots\/(LOT-\d+)$/);
  if(m&&method==='PATCH'){
@@ -148,8 +95,8 @@ async function handleWorkspace(req,res,user){const url=new URL(req.url,'http://l
    run('UPDATE lots SET quantity_kg=?,grade=?,safety=?,version=version+1 WHERE id=?',quantity,grade,safety,id);audit(user.id,'LOT_INSPECTION_UPDATED',id,{from:current,to:{quantity,grade,safety}});return {ok:true};}));
  }
  if(path==='/api/orders'&&method==='POST'){
-  manager(user);const b=await bodyJson(req);const quantity=finiteKg(b.quantity_kg);const price=moneyPaise(b.price_inr);const grade=str(b.grade,2);ensure(allowedGrade.includes(grade),'Invalid grade.');const availability=b.availability==='paused'?'paused':'accepting';const original=b.order_type==='original'?1:0;
-  return reply(res,201,transaction(()=>{const id=nextId('order','ORD');run('INSERT INTO orders (id,buyer_id,buyer_name,crop,grade,quantity_kg,price_paise,availability,is_original,created_at,transport_paise,handling_paise) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,str(b.buyer_id,50).toLowerCase(),str(b.buyer_name),str(b.crop),grade,quantity,price,availability,original,now(),moneyPaise(b.transport_inr??0),moneyPaise(b.handling_inr??0));audit(user.id,'BUYER_ORDER_CREATED',id,{buyer:b.buyer_name,quantity,is_original:!!original});return {id};}));
+  manager(user);const b=await bodyJson(req);const quantity=finiteKg(b.quantity_kg);const price=moneyPaise(b.price_inr);const grade=str(b.grade,2);ensure(allowedGrade.includes(grade),'Invalid grade.');const availability=b.availability==='paused'?'paused':'accepting';
+  return reply(res,201,transaction(()=>{const id=nextId('order','ORD');run('INSERT INTO orders (id,buyer_id,buyer_name,crop,grade,quantity_kg,price_paise,availability,is_original,created_at,transport_paise,handling_paise) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',id,str(b.buyer_id,50).toLowerCase(),str(b.buyer_name),str(b.crop),grade,quantity,price,availability,0,now(),moneyPaise(b.transport_inr??0),moneyPaise(b.handling_inr??0));audit(user.id,'BUYER_ORDER_CREATED',id,{buyer:b.buyer_name,quantity});return {id};}));
  }
  m=path.match(/^\/api\/orders\/(ORD-\d+)$/);
  if(m&&method==='PATCH'){
@@ -187,7 +134,7 @@ async function handleWorkspace(req,res,user){const url=new URL(req.url,'http://l
    const qty=finiteKg(b.received_kg),grade=str(b.grade,2),safety=str(b.safety,10);
    ensure(qty<=q.offered_kg+.0001,'Received quantity cannot exceed the confirmed quotation.',409);
    ensure(allowedGrade.includes(grade)&&allowedSafety.includes(safety),'Invalid inspection grade or safety status.');
-   const lotId=nextId('lot','LOT');run('INSERT INTO lots(id,farmer,crop,quantity_kg,grade,safety,created_at,version) VALUES(?,?,?,?,?,?,?,1)',lotId,q.supplier_name,q.crop,qty,grade,safety,now());
+   const lotId=nextId('lot','LOT');run('INSERT INTO lots VALUES(?,?,?,?,?,?,?,1)',lotId,q.supplier_name,q.crop,qty,grade,safety,now());
    run("UPDATE supplier_quotes SET status='received',received_kg=?,received_lot_id=? WHERE id=?",qty,lotId,id);
    audit(user.id,'SUPPLY_RECEIVED_INSPECTED',id,{received_kg:qty,received_lot_id:lotId,grade,safety,eligible:qualityCheck({grade,crop:q.crop,safety},original)});
    return {status:'received',lot_id:lotId,eligible:qualityCheck({grade,crop:q.crop,safety},original)};
@@ -287,7 +234,7 @@ async function handleWorkspace(req,res,user){const url=new URL(req.url,'http://l
  return serveStatic(res,path);
  }catch(e){const status=e.status||500;if(status>=500)console.error('[Agrova]',e);return reply(res,status,{error:status>=500 && !String(e.message).startsWith('Gemini')?'Unexpected server error.':e.message});}
 }
-async function serveStatic(res,path){if(path.startsWith('/api/'))return reply(res,404,{error:'Endpoint not found.'});const file=path==='/'?'/index.html':path;const absolute=resolve(publicDir,'.'+file);const relativeFile=relative(publicDir,absolute);if(relativeFile==='..'||relativeFile.startsWith('..'+sep)||isAbsolute(relativeFile))return reply(res,403,{error:'Forbidden'});
+async function serveStatic(res,path){if(path.startsWith('/api/'))return reply(res,404,{error:'Endpoint not found.'});const file=path==='/'?'/index.html':path;const absolute=resolve(publicDir,'.'+file);if(!absolute.startsWith(publicDir + (process.platform === 'win32' ? '\\' : '/'))&&!['/index.html', '/'].includes(file))return reply(res,403,{error:'Forbidden'});
  const dest=existsSync(absolute)?absolute:resolve(publicDir,'index.html');const ext=extname(dest);const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml'}[ext]||'application/octet-stream';res.writeHead(200,{'Content-Type':mime,'X-Content-Type-Options':'nosniff','Cache-Control':'no-cache'});res.end(await readFile(dest));}
 const port=Number(process.env.PORT||3000);
-http.createServer((req,res)=>{handle(req,res).catch(err=>{console.error(err);if(!res.headersSent)reply(res,500,{error:'Server error.'});else res.end()});}).listen(port,'0.0.0.0',()=>console.log(`Agrova V3.1 at http://localhost:${port}`));
+http.createServer((req,res)=>{handle(req,res).catch(err=>{console.error(err);if(!res.headersSent)reply(res,500,{error:'Server error.'});else res.end()});}).listen(port,'0.0.0.0',()=>console.log(`Agrova V3 at http://localhost:${port}`));
