@@ -78,18 +78,6 @@ Start fresh by clicking **Reset demo** (it wipes working demo records and re-see
 13. Verified inspection **28 kg** vs buyer **25 kg**, agreed ₹16/kg → **3 kg difference, ₹48 under review**, provisional inspection gross **₹448**. Change the buyer statement to 21 kg and the difference becomes **₹112**, proving it isn't a fixed result.
 14. Record a reviewer decision and reason; go to **Farmer ledger** and **Activity log**. Settlements are **never silently marked paid**.
 
-### Round 2 Change 1: correct verified evidence
-
-The FPO manager sees **Verify fields** only on unverified inspection receipts and buyer statements. Once verified, the action becomes **Correct**. The correction form starts with the current verified values, not a fresh extraction. It requires a reason of 10–1000 characters after trimming; accepted quantity cannot exceed either the document's delivered quantity (when provided) or the recorded delivery quantity. Buyers cannot open or submit corrections.
-
-The first-time `POST /api/evidence/:id/verify` endpoint rejects repeat verification with HTTP 409. Corrections use `POST /api/evidence/:id/correct` and include the edited fields, `reason`, and `expected_verified_json` (the exact JSON of the values loaded into the form). A stale form is rejected with HTTP 409. A successful correction records the manager, reason, explicit old/new accepted kg, and full previous/corrected snapshots in an `EVIDENCE_CORRECTED` event, recalculates settlement, and reopens any earlier review. A no-change submission is rejected.
-
-### Round 2 Change 2: permanent evidence versions
-
-First verification creates Version 1 for either an inspection receipt or buyer statement without requiring a correction reason. Every correction appends a new `evidence_versions` row with the complete verified JSON, reason, manager ID, version number, and timestamp in the same transaction as the evidence update and audit event. SQLite triggers reject updates and deletes of version rows. Reconciliation reads the newest stored version, so an outdated legacy `evidence.verified_json` mirror cannot change the result. Settlement & Review displays the history newest first and marks the current version. Corrections after a recorded review reopen the delivery as `needs_review`, including when the latest evidence quantities agree.
-
-Opening an older database migrates verified evidence into version history without overwriting existing version rows. Where earlier correction audit snapshots exist, migration reconstructs their sequence; where provenance is missing, only the current verified snapshot can be recovered. The demo reset preserves historical version rows and does not reuse their evidence IDs. This is append-only protection within the local SQLite application, not a substitute for off-host backups or production-grade audit security.
-
 ### Fast demo tip
 
 Keep the demo under 4–5 minutes and explain that V3 partner quotes/buyer transport charges are **illustrative**, not live vendor quotes. For judges who demand proof, edit quantities and costs and show genuine recalculation.
@@ -100,13 +88,7 @@ Keep the demo under 4–5 minutes and explain that V3 partner quotes/buyer trans
 npm test
 ```
 
-Runs automated business-rule and isolated API tests, including first verification without a reason, append-only version history, legacy migration, newest-version reconciliation, manager correction, reason/quantity validation, and repeat-verification rejection.
-
-Run the end-to-end smoke workflow safely against a temporary copy of the server and a disposable database:
-
-```bash
-npm run smoke:isolated
-```
+Runs **14 automated pure business-rule tests**, covering shortage maths, reservation accounting, quality, economics, document parsing and settlement difference.
 
 With `npm start` running in a different terminal:
 
@@ -114,7 +96,7 @@ With `npm start` running in a different terminal:
 npm run smoke
 ```
 
-This direct command performs the same workflow against the server at `TEST_BASE_URL`: sourcing 15+10, allocation of 80, Grade B recovery 30 and a **₹48** settlement discrepancy. **CAUTION: `npm run smoke` intentionally resets and mutates that server's demo records. Use `smoke:isolated` unless the target server is disposable.**
+This performs an **end-to-end API smoke test** of the actual V3 server: sourcing 15+10, allocation of 80, Grade B recovery 30 and a **₹48** settlement discrepancy. **CAUTION: `npm run smoke` intentionally resets and mutates demo records.**
 
 For a nondefault port, set `TEST_BASE_URL=http://localhost:3001` before running the smoke command.
 
