@@ -28,7 +28,7 @@ const canViewDelivery=(user,d)=>{manager(user);return d};
 function breakdown(delivery){
  const docs=sql('SELECT * FROM evidence WHERE delivery_id=? ORDER BY created_at DESC,id DESC',delivery.id);
  const evidence=docs.map(({file_path,...doc})=>{
-  const versions=listEvidenceVersions(doc.id).map((version,index)=>({version_number:version.version_number,reason:version.reason,manager_id:version.manager_id,created_at:version.created_at,verified:JSON.parse(version.verified_json),current:index===0}));
+  const versions=listEvidenceVersions(doc.id).map((version,index)=>({version_number:version.version_number,reason:version.reason,manager_id:version.manager_id,manager_name:one('SELECT display_name FROM users WHERE id=?',version.manager_id)?.display_name||version.manager_id,created_at:version.created_at,verified:JSON.parse(version.verified_json),current:index===0}));
   return {...doc,proposed:parseJSON(doc.proposed_json),verified:versions[0]?.verified||null,versions};
  });
  const verified=kind=>evidence.find(d=>d.kind===kind && d.verified)?.verified||null;
