@@ -2,6 +2,7 @@ Agrova 🌱
 Crop Recovery & Settlement Platform
 Built by Team INNOVATRIX
 Live Url: https://agrova-innovatrix-1.onrender.com/
+Live Working Url:https://agrova-innovatrix-1.onrender.com/
 Agrova is a prototype designed to help Farmer Producer Organisations (FPOs) manage crop quality mismatches, find suitable buyers, and track produce from an order shortage to a transparent settlement.
 Version 1 — Basic Frontend
 This initial reconstructed V1 baseline includes:
@@ -31,3 +32,5 @@ Development Roadmap
 Team
 INNOVATRIX — Hackathon Project
 Recover smarter. Fulfill better. Settle transparently.
+Recover smarter. Fulfill better.
+
