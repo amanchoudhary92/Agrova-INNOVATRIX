@@ -4,68 +4,23 @@
 /* Agrova V3 additions */
 .hero-secondary{margin-left:10px;background:transparent;border-color:#b7d9ab;color:white}.hero-secondary:hover{background:#386b50}.supply-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.supply-card{border:1px solid #dfe8dc;border-radius:10px;padding:20px;background:#fcfdfb}.supply-card .fine{font-size:11px;color:#8b9b91;margin:5px 0}.supply-meta{display:flex;justify-content:space-between;gap:8px;border-top:1px solid #e8eee5;border-bottom:1px solid #e8eee5;padding:14px 0;margin:15px 0;font-size:12px;flex-wrap:wrap}.supply-meta span{white-space:nowrap}.passport{background:#fbfdf8;border:1px solid #e1eadd;padding:19px;border-radius:10px;margin-bottom:14px}.passport h3{margin:5px 0 15px}.supply-card .button-row{margin-top:14px}.nav{margin-top:25px}.sidebar{padding-top:26px}.center-label{margin-top:29px}.nav-btn{padding:11px 14px}.sidebar .brand{font-size:30px}@media(max-width:1100px){.supply-grid{grid-template-columns:1fr}}@media(max-width:640px){.nav{overflow-x:auto;justify-content:flex-start}.nav-btn{flex:0 0 auto;min-width:64px}.supply-grid{grid-template-columns:1fr}.hero-secondary{margin-left:0;margin-top:9px}}
 
-/* Agrova V3.1 — FPO onboarding, accessible authentication and mobile navigation */
-.login-form{padding:46px 0;max-width:520px}
-.login-form .lead{line-height:1.65}
-.login-form h2{margin-bottom:9px}
-.auth-form{margin-top:23px}
-.auth-form .field{margin:13px 0}
-.auth-form .field input{min-height:46px;font-size:15px}
-.password-control{position:relative;display:flex;align-items:center}
-.password-control input{padding-right:76px!important}
-.password-control button{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:#edf3e9;color:#315c43;padding:8px 12px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:700}
-.password-control button:focus-visible,.auth-links button:focus-visible{outline:3px solid #8fb879;outline-offset:3px}
-.password-hint{font-size:12px;color:#647a6a;line-height:1.5;margin:8px 0}
-.auth-links{display:flex;flex-wrap:wrap;gap:11px 16px;border-top:1px solid #dce5dc;margin-top:22px;padding-top:18px}
-.auth-links button{border:none;background:transparent;color:#2f7050;text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-weight:700;font-size:12px;padding:4px 0}
-.auth-notice{background:#e5f3e8;border:1px solid #a4cba9;border-radius:9px;color:#215039;padding:14px 16px;font-size:13px;line-height:1.6;margin:16px 0}
-.auth-steps{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
-.auth-steps span{color:#e2f2e6;border:1px solid #568066;border-radius:20px;padding:9px 13px;font-size:12px}
-.mobile-nav,.mobile-drawer{display:none}
-button,input,select,textarea{font-family:inherit}
-button:disabled{opacity:.5;cursor:not-allowed}
-@media (max-width:900px){
- .login-page{grid-template-columns:minmax(0,.78fr) minmax(0,1fr)}
- .login-art{padding:38px}
- .login-form{width:min(430px,calc(100% - 48px))}
-}
-@media(max-width:640px){
- .login-page{display:block;min-height:100vh;background:#f4f7f2}
- .login-art{min-height:0;padding:23px 23px 24px;gap:12px}
- .login-art h1{font-size:27px;letter-spacing:-1.1px;line-height:1.18}
- .login-art p{line-height:1.55;margin:10px 0}
- .login-art .text-xs{display:none}
- .login-form{padding:25px 0 45px;margin:0 auto;width:calc(100% - 42px);max-width:440px}
- .login-form h2{font-size:28px}
- .login-form .hint{margin-top:15px;padding:14px;overflow-wrap:anywhere}
- .auth-steps{display:none}
- .login-form .brand{display:none}
- .auth-form .btn.primary{min-height:48px;font-size:14px}
- .sidebar{display:none!important}
- .page{padding-bottom:92px}
- .mobile-nav{position:fixed;display:flex;bottom:0;left:0;right:0;z-index:49;padding:7px max(8px,env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom));background:white;border-top:1px solid #dce6db;box-shadow:0 -5px 22px #20452b14;justify-content:space-around;gap:3px}
- .mobile-nav-button{border:0;background:transparent;color:#607466;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-width:0;padding:6px 2px;min-height:52px;gap:5px;cursor:pointer}
- .mobile-nav-button>span{font-size:21px;line-height:1}
- .mobile-nav-button small{font-size:10px;font-weight:650;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
- .mobile-nav-button.active{background:#eaf3e7;color:#265e42}
- .mobile-drawer{position:fixed;display:block;z-index:48;bottom:calc(68px + env(safe-area-inset-bottom));left:10px;right:10px;max-height:65vh;overflow-y:auto;padding:19px;border:1px solid #d8e4d7;background:white;box-shadow:0 -14px 48px #112b1c30;border-radius:16px 16px 10px 10px}
- .mobile-drawer-heading{display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid #e1e9df}
- .mobile-drawer-heading button{background:transparent;border:0;font-size:18px;padding:8px}
- .mobile-drawer-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
- .mobile-drawer-grid button{text-align:left;min-height:46px;border:1px solid #e1e9df;background:#f7faf5;border-radius:9px;padding:11px;font-size:12px;font-weight:600;color:#345541}
- .topbar{padding:0 13px}
- .top-actions{gap:6px}
- .top-actions .btn.small{padding:7px 9px}
- .profile-pill{max-width:125px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
- .demo-tag{font-size:9px;padding:7px;white-space:nowrap}
- .content{padding:23px 14px 48px}
- .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
- .metric .v{font-size:clamp(22px,6.5vw,31px)}
- .supply-card,.panel{min-width:0}
- .section-head{flex-wrap:wrap;gap:15px}
- .section-head>.btn{width:100%}
- .modal-backdrop{padding:10px;align-items:center}
- .modal{max-height:85dvh;padding:20px 15px}
- .hero .btn{margin-right:6px;max-width:100%}
-}
-@media(max-width:380px){.demo-tag{display:none}.top-actions{justify-content:flex-end}}
+
+/* ===== Agrova Stage 1 frontend: additional responsive dashboards ===== */
+.stage-pill{display:inline-block;padding:6px 10px;border-radius:99px;background:#edf5e9;color:#3b634a;font-size:11px;font-weight:700;line-height:1.4}
+.stage-notice{padding:13px 16px;margin:0 0 18px;border:1px solid #d5e7d2;border-left:4px solid #83ab72;border-radius:9px;background:#f3f8ef;color:#446350;font-size:12px;line-height:1.6}
+.stage-notice strong{color:#224a35}
+.stage-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0 22px}.stage-kpis .metric{min-width:0}.stage-kpis .v{overflow-wrap:anywhere;font-size:clamp(17px,2vw,32px)}
+.stage-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:18px 0}.stage-spaced{margin-top:18px}
+.stage-list{display:grid;gap:0}.stage-list-row{display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid #e8eee6;padding:15px 0;font-size:13px;text-align:left}.stage-list-row:last-child{border-bottom:0}.stage-list-row span:last-child{text-align:right}.stage-list-row small{display:block;color:#7f9286;margin-top:5px;font-size:11px;font-weight:400}.stage-list-row .pill{flex-shrink:0}.stage-action-stack{display:grid;gap:12px;margin-top:19px}.stage-action-stack .btn{width:100%;text-align:left}
+.stage-filters{display:flex;align-items:end;gap:15px;flex-wrap:wrap;margin-bottom:18px}.stage-filters .field{flex:1;min-width:165px;margin:0}.stage-market-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.stage-product{display:flex;flex-direction:column;gap:12px;min-width:0}.stage-product h3{font-size:21px;margin:0}.stage-product>.btn{margin-top:auto}.stage-crop-art{height:110px;border-radius:10px;background:linear-gradient(135deg,#d9e9c9,#f2f8ea);display:grid;place-items:center;font-size:52px}.stage-product .kv{padding:7px 0}
+.stage-match-controls{display:flex;align-items:end;flex-wrap:wrap;gap:13px;margin-bottom:20px}.stage-match-controls>label{display:flex;flex-direction:column;gap:7px}.stage-select-label{font-size:12px;color:#687d6c;display:block;margin-bottom:8px}.stage-select{border:1px solid #dce5da;background:#fff;color:#1b422e;border-radius:8px;padding:12px;width:min(100%,360px);font-size:13px}.stage-match-controls .stage-select{width:210px;max-width:100%}.stage-rec-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.stage-rec{min-width:0}.stage-rec h3{margin:0}.stage-amount{font-size:31px;font-weight:800;letter-spacing:-1px;margin:18px 0;color:#244d38}.stage-unavailable{font-size:22px;color:#7d9585}.stage-rec .kv{font-size:12px}.stage-distance{width:96px;max-width:100%;border-radius:6px;border:1px solid #dae6d6;padding:10px;color:#274d39}.stage-rec .help{margin-top:15px}
+.stage-payment-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:18px 0}.stage-payment-state{background:#f8faf5;color:#365f47;border:1px solid #d8e7d6;border-radius:9px;padding:12px;cursor:pointer;text-align:left;font-size:12px;font-weight:700}.stage-payment-state.selected{background:#e5f1da;border-color:#719b66;box-shadow:0 0 0 2px #c5dabb}.stage-payment-result{border:1px solid #e0ead8;border-radius:10px;background:#f5f8f1;padding:17px;margin-bottom:17px;font-size:13px;line-height:1.7}.stage-payment-result p{margin:9px 0 0;color:#667f6c}
+.stage-row-button{width:100%;border:0;background:transparent;cursor:pointer;color:inherit;font:inherit}.stage-row-button.is-active{background:#f2f8ed}.stage-invoice{color:#24392b;background:#fff;border:1px solid #dce8dd;border-radius:12px;padding:20px;margin-top:15px}.stage-invoice-top{display:flex;justify-content:space-between;gap:20px;align-items:start;border-bottom:2px solid #335c3e;padding-bottom:17px}.stage-invoice-top strong{display:block;color:#9d413f;font-size:10px;margin-top:7px}.stage-invoice-top h2{margin:0;font-size:19px;text-align:right}.stage-invoice-top span{font-size:10px}.stage-invoice-brand{font-size:25px;font-weight:850;color:#214b32}.stage-invoice-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;font-size:12px;line-height:1.6;padding:18px 0}.stage-invoice-cols small{font-weight:800;color:#6b8575}.stage-invoice-table{width:100%;border-collapse:collapse;font-size:12px}.stage-invoice-table td,.stage-invoice-table th{padding:10px 6px;border-bottom:1px solid #d6e0d5;text-align:left}.stage-invoice-total{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-top:19px}.stage-invoice-total strong{font-size:18px}.stage-invoice-foot{font-size:10px;line-height:1.6;color:#9e453e;margin-top:18px}
+.stage-delivery-form{display:grid;gap:11px}.stage-delivery-form .field{margin:3px 0}.stage-success{border-left:3px solid #75ab57;background:#edf7e8;padding:12px;color:#31573c;font-size:12px}.stage-timeline{margin:21px 0 0}.stage-timeline-row{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #e7eee4;font-size:12px}.stage-timeline-row>span{width:26px;height:26px;display:grid;place-items:center;border-radius:100%;background:#e9f2e2;color:#4c7652}.stage-timeline-row .pill{margin-left:auto}
+.stage-ranking-empty{background:#f7faf5;border:1px solid #e1ebdc;border-radius:12px;padding:35px 20px;text-align:center;margin:18px 0}.stage-star{font-size:23px;letter-spacing:4px;color:#8caf78}.stage-ranking-empty p{font-size:12px;line-height:1.7;color:#718878}
+.nav{overflow-y:auto;scrollbar-width:thin}.sidebar{min-height:0}.nav-btn{flex-shrink:0}.stage-payment-options button:hover,.stage-row-button:hover{border-color:#8bb178;background:#f3faef}
+@media(max-width:1250px){.stage-market-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:950px){.stage-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.stage-two{grid-template-columns:1fr}.stage-rec-grid{grid-template-columns:1fr}.stage-market-grid{grid-template-columns:1fr}.stage-kpis .metric{min-height:135px}.stage-invoice-cols{grid-template-columns:1fr}}
+@media(max-width:640px){.stage-market-grid{grid-template-columns:1fr}.stage-two{grid-template-columns:1fr}.stage-rec-grid{grid-template-columns:1fr}.stage-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.stage-kpis .metric{padding:14px}.stage-kpis .v{font-size:20px}.stage-match-controls{display:grid;grid-template-columns:1fr}.stage-match-controls .stage-select,.stage-select{width:100%}.stage-payment-options{grid-template-columns:1fr}.stage-filters{display:grid;grid-template-columns:1fr}.stage-invoice{padding:14px}.stage-invoice-total{flex-direction:column}.nav{scroll-snap-type:x proximity}.nav-btn{scroll-snap-align:start}.sidebar{overflow:visible}}
+@media print{body *{visibility:hidden!important}#stage-print-invoice,#stage-print-invoice *{visibility:visible!important}#stage-print-invoice{position:absolute;left:0;top:0;width:100%;border:0;padding:20px;font-size:12px;box-shadow:none}body{background:white!important}@page{size:A4;margin:14mm}}
+
+.stage-price{width:112px;max-width:100%;border:1px solid #dae6d6;border-radius:7px;padding:10px;color:#244b36;background:white}.stage-new-order{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;gap:12px}.stage-new-order .field{margin:0}.stage-new-order .btn{grid-column:1/-1;justify-self:start}body.is-working{cursor:progress}body.is-working button{cursor:progress;opacity:.75}@media(max-width:950px){.stage-new-order{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.stage-new-order{grid-template-columns:1fr}}
