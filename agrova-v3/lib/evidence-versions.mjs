@@ -23,6 +23,25 @@ function insertVersion({evidence,snapshot,version_number,correction_reason,verif
  return {id,evidence_id:evidence.id,version_number,kind:evidence.kind,accepted_kg:snapshot.accepted_kg,delivered_kg:snapshot.delivered_kg,rejected_kg:snapshot.rejected_kg,rate_inr:snapshot.rate_inr,deductions_inr:snapshot.deductions_inr,lot_ref:snapshot.lot_ref,source_reference:snapshot.source_reference,correction_reason,verified_by,created_at,verified:snapshot};
 }
 
+// Appends a corrected version. Earlier versions are never updated or deleted.
+export function appendEvidenceCorrection(evidence,verified,verified_by='system',{correction_reason=null}={}){
+ if(!evidence?.id)throw new Error('Evidence record is required.');
+ if(!['inspection','buyer'].includes(evidence.kind))throw new Error('Unsupported evidence type.');
+ const reason=String(correction_reason||'').trim().slice(0,500);
+ if(!reason)throw new Error('A correction reason is required when revising a verified document.');
+ const snapshot=normalizeVerified(verified);
+ const actor=String(verified_by||'system');
+ return transactionSafe(()=>{
+  const latest=one('SELECT version_number FROM evidence_versions WHERE evidence_id=? ORDER BY version_number DESC LIMIT 1',evidence.id);
+  if(!latest)throw new Error('This evidence has no verified version yet. Verify it first.');
+  const version_number=latest.version_number+1;
+  const version=insertVersion({evidence,snapshot,version_number,correction_reason:reason,verified_by:actor});
+  run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(snapshot),evidence.id);
+  audit(actor,'EVIDENCE_CORRECTED',evidence.id,{version_number,previous_version_number:latest.version_number,kind:evidence.kind,accepted_kg:snapshot.accepted_kg,correction_reason:reason});
+  return version;
+ });
+}
+
 // Version 1: the original verification. No correction reason is required.
 export function createInitialEvidenceVersion(evidence,verified,verified_by='system'){
  if(!evidence?.id)throw new Error('Evidence record is required.');
