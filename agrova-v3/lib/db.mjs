@@ -6,6 +6,51 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 const dbPath=resolve(process.cwd(),'storage/agrova.sqlite');mkdirSync(dirname(dbPath),{recursive:true});
 export const db=new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+const tenantContext=new AsyncLocalStorage();
+const contextDb=()=>tenantContext.getStore()||db;
+export const withWorkspace=(workspace,callback)=>tenantContext.run(workspace||db,callback);
+export const sql=(query,...params)=>contextDb().prepare(query).all(...params);
+export const one=(query,...params)=>contextDb().prepare(query).get(...params);
+export const run=(query,...params)=>contextDb().prepare(query).run(...params);
+export function transaction(fn){const database=contextDb();database.exec('BEGIN IMMEDIATE');try{const v=fn();database.exec('COMMIT');return v;}catch(e){database.exec('ROLLBACK');throw e;}}
+// Lets a helper reuse the caller's transaction instead of failing on a nested BEGIN.
+export function inTransaction(){const database=contextDb();return typeof database.isTransaction==='boolean'?database.isTransaction:false;}
+export function transactionSafe(fn){return inTransaction()?fn():transaction(fn);}
+// Append-only evidence history: one immutable row per verification of an evidence document.
+const EVIDENCE_VERSIONS_DDL=`
+CREATE TABLE IF NOT EXISTS evidence_versions(
+ id TEXT PRIMARY KEY,
+ evidence_id TEXT NOT NULL REFERENCES evidence(id),
+ version_number INTEGER NOT NULL CHECK(version_number>=1),
+ kind TEXT NOT NULL CHECK(kind IN ('inspection','buyer')),
+ accepted_kg REAL NOT NULL CHECK(accepted_kg>=0),
+ delivered_kg REAL,
+ rejected_kg REAL,
+ rate_inr REAL,
+ deductions_inr REAL NOT NULL DEFAULT 0 CHECK(deductions_inr>=0),
+ lot_ref TEXT,
+ source_reference TEXT,
+ correction_reason TEXT,
+ verified_by TEXT NOT NULL,
+ verified_json TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ UNIQUE(evidence_id,version_number));
+CREATE INDEX IF NOT EXISTS idx_evidence_versions_evidence ON evidence_versions(evidence_id,version_number);
+`;
+const workspaces=new Map();
+export function workspaceFor(fpoId){
+ if(!/^[a-f0-9-]{36}$/.test(fpoId))throw Error('Invalid FPO identifier');
+ if(workspaces.has(fpoId))return workspaces.get(fpoId);
+ const folder=resolve(process.cwd(),'storage/workspaces');mkdirSync(folder,{recursive:true});
+ const tenant=new DatabaseSync(resolve(folder,fpoId+'.sqlite'));
+ tenant.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
+ // Schema only: no sample farmers, orders, credentials or other FPO data crosses workspaces.
+ const definitions=db.prepare("SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END").all();
+ for(const {sql:ddl} of definitions)tenant.exec(ddl);
+ // Tenants created before evidence versioning existed still need the additive history table.
+ tenant.exec(EVIDENCE_VERSIONS_DDL);
+ workspaces.set(fpoId,tenant);
+ return tenant;
 // Each FPO workspace gets a separate physical SQLite database. Existing V3
 // managers with no fpo_id continue to use the original database unchanged.
 const context = new AsyncLocalStorage();
@@ -101,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_delivery ON evidence(delivery_id);
 `);
 db.exec(evidenceVersionsSchema);
 migrateEvidenceVersions(db);
+db.exec(EVIDENCE_VERSIONS_DDL);
 db.exec(`
 CREATE TABLE IF NOT EXISTS supplier_quotes(
  id TEXT PRIMARY KEY, original_order_id TEXT NOT NULL REFERENCES orders(id), supplier_name TEXT NOT NULL,
@@ -136,6 +182,7 @@ for(const [name,ddl] of [
 export function audit(actor,action,ref,detail={}){run('INSERT INTO events VALUES(?,?,?,?,?,?)',nextId('event','EVT'),actor,action,ref,JSON.stringify(detail),new Date().toISOString());}
 export function seedDemo(){return transaction(()=>{
  const nextEvidence=Math.max(one("SELECT val FROM counters WHERE name='evidence'")?.val||1,(one('SELECT MAX(CAST(SUBSTR(evidence_id,5) AS INTEGER)) AS maximum FROM evidence_versions')?.maximum||0)+1);
+  for(const table of ['original_allocations','supplier_quotes','reviews','evidence_versions','evidence','deliveries','offers','cases','orders','lots','farmers','events','counters'])run('DELETE FROM '+table);
  for(const table of ['demo_payment_attempts','farmer_price_notes','original_allocations','supplier_quotes','reviews','evidence','deliveries','offers','cases','orders','lots','events','counters'])run('DELETE FROM '+table);
  const now=new Date().toISOString();
  for(const l of [['LOT-001','Asha Devi',30,'A'],['LOT-002','Ravi Kumar',40,'B'],['LOT-003','Meena Singh',25,'A']])run('INSERT INTO lots VALUES(?,?,?,?,?,?,?,1)',l[0],l[1],'Tomatoes',l[2],l[3],'cleared',now);
@@ -150,6 +197,8 @@ export function seedDemo(){return transaction(()=>{
  ])run('INSERT INTO supplier_quotes(id,original_order_id,supplier_name,location,crop,grade,offered_kg,unit_price_paise,transport_paise,handling_paise,source_reference,status,received_kg,received_lot_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,'ORD-001',supplier,location,'Tomatoes','A',qty,rate,transport,handling,'ILLUSTRATIVE_PARTNER_QUOTE','quoted',null,null,now);
  
  for(const [a,b] of [['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',nextEvidence],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
+  for(const [a,b] of [['farmer',4],['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['evidence_version',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
+ for(const [a,b] of [['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
  audit('system','DEMO_RESET','CASE-001',{note:'Illustrative tomato pilot: quantities and prices are sample data.'});
  });}
 const isUninitializedDemo = !one('SELECT id FROM users LIMIT 1') && !one('SELECT id FROM lots LIMIT 1') && !one('SELECT id FROM orders LIMIT 1') && !one('SELECT id FROM events LIMIT 1');
