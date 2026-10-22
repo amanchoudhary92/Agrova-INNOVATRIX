@@ -41,6 +41,24 @@ async function validate(type,user,views){
   assert(matching.includes('10 kg') || matching.includes('10'));
   const invoice=vm.runInContext("view='invoices';renderView()",ctx);
   assert(invoice.includes('SAMPLE DOCUMENT'));
+  const verified={id:'EVD-001',delivery_id:'DLV-001',kind:'inspection',file_name:'inspection.txt',mime:'text/plain',engine:'offline-text-parser',created_at:new Date().toISOString(),verified:{accepted_kg:28,delivered_kg:30,rejected_kg:2,rate_inr:16,deductions_inr:0,lot_ref:'LOT-002',source_reference:'Receipt line 4'}};
+  ctx.testDelivery={id:'DLV-001',delivered_kg:30,evidence:[verified]};
+  vm.runInContext('state.deliveries=[testDelivery];modal={type:"correct",id:"EVD-001"}',ctx);
+  const verifiedLine=vm.runInContext('docLine(testDelivery.evidence[0])',ctx);
+  assert(verifiedLine.includes('data-action="correct-evidence"'));
+  assert(!verifiedLine.includes('data-action="verify-evidence"'));
+  const correction=vm.runInContext('modalHTML()',ctx);
+  assert(correction.includes('value="28"')&&correction.includes('value="LOT-002"'));
+  assert(correction.includes('name="reason"')&&correction.includes('minlength="10"'));
+  assert(correction.includes('Save correction')&&!correction.includes('disabled>Save correction'));
+  vm.runInContext('testDelivery.evidence[0].verified=null',ctx);
+  const unverifiedLine=vm.runInContext('docLine(testDelivery.evidence[0])',ctx);
+  assert(unverifiedLine.includes('data-action="verify-evidence"'));
+  assert(!unverifiedLine.includes('data-action="correct-evidence"'));
+ }else{
+  ctx.testDoc={id:'EVD-001',kind:'buyer',file_name:'statement.txt',created_at:new Date().toISOString(),engine:'pending',verified:{accepted_kg:25}};
+  const buyerLine=vm.runInContext('docLine(testDoc)',ctx);
+  assert(!buyerLine.includes('data-action="correct-evidence"'));
  }
 }
 await validate('manager',fixture,managerViews);

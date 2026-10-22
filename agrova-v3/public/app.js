@@ -430,7 +430,7 @@ document.addEventListener('submit',async e=>{
   const delivery=state.deliveries.find(item=>item.id===doc?.delivery_id);
   if(!doc?.verified||!delivery){notify('Verified evidence is no longer available. Refresh and try again.',true);return;}
   if(vals.accepted_kg>delivery.delivered_kg){notify('Accepted quantity cannot exceed recorded delivery.',true);return;}
-  return work(()=>request(`/evidence/${id}/correct`,'POST',vals),'Correction saved and reconciliation reopened for review.');
+  return work(()=>request(`/evidence/${id}/correct`,'POST',{...vals,expected_verified_json:JSON.stringify(doc.verified)}),'Correction saved and reconciliation reopened for review.');
  }
  if(type==='review')return work(()=>request('/reviews','POST',{...vals,delivery_id:id}),'Human decision recorded; payment remains unpaid.');
 });

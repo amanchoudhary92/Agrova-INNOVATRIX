@@ -86,7 +86,7 @@ test('manager correction uses a separate route and preserves before-and-after au
  const delivery=initial.deliveries.find(item=>item.id===deliveryId);
  const buyerEvidence=delivery.evidence.find(item=>item.kind==='buyer');
  const path=`/api/evidence/${buyerEvidence.id}/correct`;
- const fields={...buyerEvidence.verified,accepted_kg:27,reason:'Buyer receipt transcription fixed.'};
+ const fields={...buyerEvidence.verified,accepted_kg:27,reason:'Buyer receipt transcription fixed.',expected_verified_json:JSON.stringify(buyerEvidence.verified)};
  const review=await api('POST','/api/reviews',{delivery_id:deliveryId,decision:'more_evidence',note:'Check the original buyer statement.'});
  assert.equal(review.status,201);
  assert.equal((await api('POST',path,{...fields,reason:'short'})).status,400);
@@ -109,10 +109,30 @@ test('manager correction uses a separate route and preserves before-and-after au
  assert.equal((await api('POST',path,fields)).status,409);
 });
 
+test('correction requires verified evidence and rejects stale snapshots',async()=>{
+ const upload=await api('POST','/api/evidence',{delivery_id:deliveryId,kind:'buyer',file_name:'new-statement.txt',mime:'text/plain',base64:Buffer.from('Accepted: 24').toString('base64')});
+ assert.equal(upload.status,201);
+ const unverified=await api('POST',`/api/evidence/${upload.data.id}/correct`,{accepted_kg:24,reason:'Corrected statement reference.'});
+ assert.equal(unverified.status,409);
+
+ const before=(await api('GET','/api/bootstrap')).data;
+ const inspection=before.deliveries.find(item=>item.id===deliveryId).evidence.find(item=>item.kind==='inspection');
+ const path=`/api/evidence/${inspection.id}/correct`;
+ const stale=JSON.stringify(inspection.verified);
+ assert.equal((await api('POST',path,{...inspection.verified,accepted_kg:'',reason:'Inspection receipt reading fixed.',expected_verified_json:stale})).status,400);
+ const first=await api('POST',path,{...inspection.verified,accepted_kg:27,reason:'Inspection receipt reading fixed.',expected_verified_json:stale});
+ assert.equal(first.status,200);
+ const second=await api('POST',path,{...inspection.verified,accepted_kg:26,reason:'Another inspection adjustment.',expected_verified_json:stale});
+ assert.equal(second.status,409);
+ const after=(await api('GET','/api/bootstrap')).data;
+ assert.equal(after.deliveries.find(item=>item.id===deliveryId).evidence.find(item=>item.id===inspection.id).verified.accepted_kg,27);
+ assert.equal(after.events.filter(event=>event.action==='EVIDENCE_CORRECTED'&&event.ref===inspection.id).length,1);
+});
+
 test('repeat verify rejects both evidence kinds without changing verified values or events',async()=>{
  const before=(await api('GET','/api/bootstrap')).data;
  const delivery=before.deliveries.find(item=>item.id===deliveryId);
- const snapshots=delivery.evidence.map(item=>({id:item.id,verified:item.verified}));
+ const snapshots=delivery.evidence.filter(item=>item.verified).map(item=>({id:item.id,verified:item.verified}));
  const eventCount=before.events.filter(event=>event.action==='EVIDENCE_VERIFIED').length;
  for(const {id} of snapshots){
   const repeat=await api('POST',`/api/evidence/${id}/verify`,{accepted_kg:1,delivered_kg:30,rate_inr:16});

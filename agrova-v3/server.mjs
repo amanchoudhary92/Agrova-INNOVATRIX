@@ -280,6 +280,7 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
    const result=transaction(()=>{
     const current=row('evidence',evidence.id);
     ensure(current.verified_json,'Verify evidence before correcting it.',409);
+    ensure(b.expected_verified_json===current.verified_json,'Evidence changed since this form opened. Refresh and review the latest values.',409);
     const delivery=row('deliveries',current.delivery_id);
     const quantities=validate(()=>evidenceQuantities(b,delivery.delivered_kg));
     const corrected={accepted_kg:quantities.accepted_kg,delivered_kg:quantities.delivered_kg,rejected_kg:b.rejected_kg==null?null:validate(()=>finiteKg(b.rejected_kg,{allowZero:true})),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
