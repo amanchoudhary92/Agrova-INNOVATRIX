@@ -179,3 +179,25 @@ test('settlement reads newest version even if the legacy mirror becomes stale',a
   history.close();
  }
 });
+
+test('later corrections append without changing any earlier version',async()=>{
+ const before=(await api('GET','/api/bootstrap')).data;
+ const buyer=before.deliveries.find(item=>item.id===deliveryId).evidence.find(item=>item.kind==='buyer'&&item.verified);
+ const earlier=versionsFor(buyer.id);
+ assert.deepEqual(earlier.map(item=>item.version_number),[1,2]);
+ const changed=await api('POST',`/api/evidence/${buyer.id}/correct`,{
+  ...buyer.verified,accepted_kg:26,rejected_kg:4,
+  reason:'Buyer confirmed one further kilogram rejected.',
+  expected_verified_json:JSON.stringify(buyer.verified)
+ });
+ assert.equal(changed.status,200);
+ const later=versionsFor(buyer.id);
+ assert.deepEqual(later.map(item=>item.version_number),[1,2,3]);
+ assert.deepEqual(later.slice(0,2),earlier,'earlier rows must remain byte-for-byte unchanged');
+ assert.equal(JSON.parse(later[2].verified_json).accepted_kg,26);
+ const delivery=(await api('GET','/api/bootstrap')).data.deliveries.find(item=>item.id===deliveryId);
+ assert.deepEqual(delivery.evidence.find(item=>item.id===buyer.id).versions.map(item=>item.version_number),[3,2,1]);
+ assert.equal(delivery.evidence.find(item=>item.id===buyer.id).versions[0].current,true);
+ assert.equal(delivery.reconciliation.disputed_paise,1600);
+ assert.equal(delivery.settlement_status,'needs_review');
+});
