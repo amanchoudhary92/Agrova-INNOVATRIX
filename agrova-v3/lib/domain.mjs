@@ -15,7 +15,6 @@ export function correctionReason(value){
  return reason;
 }
 export function evidenceQuantities(data,recordedDeliveredKg){
- if(data?.accepted_kg==null||data.accepted_kg==='')throw new Error('Accepted quantity is required.');
  const accepted_kg=finiteKg(data?.accepted_kg,{allowZero:true});
  const delivered_kg=data?.delivered_kg==null||data.delivered_kg===''?null:finiteKg(data.delivered_kg,{allowZero:true});
  if(delivered_kg!=null&&accepted_kg>delivered_kg)throw new Error('Accepted quantity cannot exceed document delivered quantity.');
