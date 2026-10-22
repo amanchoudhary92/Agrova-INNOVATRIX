@@ -4,11 +4,13 @@ import {existsSync} from 'node:fs';
 import {join,resolve,extname} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash,withWorkspace,workspaceFor} from './lib/db.mjs';
-import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract} from './lib/domain.mjs';
+import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract,correctionReason,evidenceQuantities} from './lib/domain.mjs';
 import {freeQuantity,orderCoverage,netRecovery,qualityCheck} from './lib/v3.mjs';
+import {latestEvidenceVersion,listEvidenceVersions,insertEvidenceVersion} from './lib/evidence-versions.mjs';
 const publicDir=resolve('public');const storageDir=resolve('storage');
 const error=(message,code=400)=>Object.assign(new Error(message),{status:code});
 const ensure=(condition,message,code=400)=>{if(!condition)throw error(message,code)};
+const validate=(fn)=>{try{return fn();}catch(e){throw error(e.message);}};
 const allowedGrade=['A','B','C'];const allowedSafety=['cleared','hold','pending'];
 const now=()=>new Date().toISOString();
 const str=(v,max=140)=>{const s=String(v??'').trim();ensure(s.length>0&&s.length<=max,'Required text is missing or too long.');return s};
@@ -25,18 +27,24 @@ const manager=(user)=>{requireUser(user);ensure(user.role==='manager','FPO manag
 const canViewDelivery=(user,d)=>{manager(user);return d};
 function breakdown(delivery){
  const docs=sql('SELECT * FROM evidence WHERE delivery_id=? ORDER BY created_at DESC,id DESC',delivery.id);
- const verified=kind=>docs.find(d=>d.kind===kind && d.verified_json)?.verified_json;
- const ins=verified('inspection')?JSON.parse(verified('inspection')):null;
- const buyer=verified('buyer')?JSON.parse(verified('buyer')):null;
+ const evidence=docs.map(({file_path,...doc})=>{
+  const versions=listEvidenceVersions(doc.id).map((version,index)=>({version_number:version.version_number,reason:version.reason,manager_id:version.manager_id,created_at:version.created_at,verified:JSON.parse(version.verified_json),current:index===0}));
+  return {...doc,proposed:parseJSON(doc.proposed_json),verified:versions[0]?.verified||null,versions};
+ });
+ const verified=kind=>evidence.find(d=>d.kind===kind && d.verified)?.verified||null;
+ const ins=verified('inspection');
+ const buyer=verified('buyer');
  const offer=row('offers',delivery.offer_id);
  const rate=offer.agreed_price_paise;
  const rec=reconcile(ins?.accepted_kg??delivery.accepted_kg,buyer?.accepted_kg??null,rate,ins?.deductions_inr!=null?moneyPaise(ins.deductions_inr):0);
  const reviews=sql('SELECT * FROM reviews WHERE delivery_id=? ORDER BY created_at DESC,id DESC',delivery.id);
  const latest=reviews[0]||null;
  const inspectionConflict=ins!=null && Math.abs(ins.accepted_kg-delivery.accepted_kg)>0.0001;
- const verifiedAfterReview=latest ? sql("SELECT id FROM events WHERE action='EVIDENCE_VERIFIED' AND created_at >= ? AND ref IN (SELECT id FROM evidence WHERE delivery_id=?)",latest.created_at,delivery.id).some(e=>{const ev=one('SELECT created_at FROM events WHERE id=?',e.id);return ev?.created_at>latest.created_at;}) : false;
- const settlement_status=latest&&!verifiedAfterReview?(latest.decision==='more_evidence'?'more_evidence':'reviewed_unpaid'):(inspectionConflict||rec.difference_kg!=null&&rec.difference_kg!==0?'needs_review':'awaiting_buyer_evidence');
- return {...delivery,offer,inspection_document_kg:ins?.accepted_kg??null,buyer_document_kg:buyer?.accepted_kg??null,inspection_conflict:inspectionConflict,reconciliation:rec,settlement_status,latest_review:latest,evidence:docs.map(({file_path,...d})=>({...d,proposed:parseJSON(d.proposed_json),verified:parseJSON(d.verified_json)}))};
+ const reviewEvent=latest?one("SELECT rowid FROM events WHERE action='REVIEW_RECORDED' AND ref=? ORDER BY rowid DESC LIMIT 1",latest.id):null;
+ const verifiedAfterReview=reviewEvent ? !!one("SELECT id FROM events WHERE rowid>? AND action IN ('EVIDENCE_VERIFIED','EVIDENCE_CORRECTED') AND ref IN (SELECT id FROM evidence WHERE delivery_id=?) LIMIT 1",reviewEvent.rowid,delivery.id) : false;
+ const correctionAfterReview=reviewEvent ? !!one("SELECT id FROM events WHERE rowid>? AND action='EVIDENCE_CORRECTED' AND ref IN (SELECT id FROM evidence WHERE delivery_id=?) LIMIT 1",reviewEvent.rowid,delivery.id) : false;
+ const settlement_status=correctionAfterReview?'needs_review':latest&&!verifiedAfterReview?(latest.decision==='more_evidence'?'more_evidence':'reviewed_unpaid'):(inspectionConflict||rec.difference_kg!=null&&rec.difference_kg!==0?'needs_review':'awaiting_buyer_evidence');
+ return {...delivery,offer,inspection_document_kg:ins?.accepted_kg??null,buyer_document_kg:buyer?.accepted_kg??null,inspection_conflict:inspectionConflict,reconciliation:rec,settlement_status,latest_review:latest,evidence};
 }
 const parseJSON=v=>{try{return JSON.parse(v)}catch{return null}};
 function bootstrap(user){requireUser(user);
@@ -258,14 +266,44 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
   const diskName=randomUUID()+'.bin';await writeFile(join(storageDir,diskName),raw,{flag:'wx'});
   return reply(res,201,transaction(()=>{const id=nextId('evidence','EVD');run('INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?,?,?)',id,b.delivery_id,kind,fileName,mime,diskName,null,null,'pending',now());audit(user.id,'EVIDENCE_UPLOADED',id,{kind,fileName});return {id};}));
  }
- m=path.match(/^\/api\/evidence\/(EVD-\d+)\/(extract|verify|file)$/);
+ m=path.match(/^\/api\/evidence\/(EVD-\d+)\/(extract|verify|correct|file)$/);
  if(m){manager(user);const evidence=row('evidence',m[1]);if(m[2]==='extract'&&method==='POST'){
    const output=await extractEvidence(evidence);transaction(()=>{run('UPDATE evidence SET proposed_json=?,engine=? WHERE id=?',JSON.stringify(output.fields),output.engine,evidence.id);audit(user.id,'EXTRACTION_PROPOSED',evidence.id,{engine:output.engine});});return reply(res,200,output);
   }
   if(m[2]==='verify'&&method==='POST'){
    const b=await bodyJson(req);const accepted=finiteKg(b.accepted_kg,{allowZero:true});const d=row('deliveries',evidence.delivery_id);ensure(accepted<=d.delivered_kg,'Accepted quantity cannot exceed delivered.');const verified={accepted_kg:accepted,delivered_kg:b.delivered_kg==null?null:finiteKg(b.delivered_kg,{allowZero:true}),rejected_kg:b.rejected_kg==null?null:finiteKg(b.rejected_kg,{allowZero:true}),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
    ensure(Number.isFinite(verified.deductions_inr)&&verified.deductions_inr>=0&&verified.deductions_inr<=1000000,'Invalid deduction.');
-   return reply(res,200,transaction(()=>{run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),evidence.id);audit(user.id,'EVIDENCE_VERIFIED',evidence.id,{accepted,kind:evidence.kind});return {ok:true};}));
+   return reply(res,200,transaction(()=>{
+    const current=row('evidence',evidence.id);
+    ensure(!current.verified_json,'Evidence is already verified. Use Correct with a reason.',409);
+    ensure(!latestEvidenceVersion(current.id),'Evidence is already verified. Use Correct with a reason.',409);
+    const version=insertEvidenceVersion(current,verified,user.id);
+    run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),current.id);
+    audit(user.id,'EVIDENCE_VERIFIED',current.id,{accepted,kind:current.kind,version_number:version.version_number});
+    return {ok:true};
+   }));
+  }
+  if(m[2]==='correct'&&method==='POST'){
+   const b=await bodyJson(req);const reason=validate(()=>correctionReason(b.reason));
+   const result=transaction(()=>{
+    const current=row('evidence',evidence.id);
+    ensure(current.verified_json,'Verify evidence before correcting it.',409);
+    const latest=latestEvidenceVersion(current.id);
+    ensure(latest&&latest.verified_json===current.verified_json,'Verified evidence history is out of sync. Refresh before correcting.',409);
+    ensure(b.expected_verified_json===current.verified_json,'Evidence changed since this form opened. Refresh and review the latest values.',409);
+    const delivery=row('deliveries',current.delivery_id);
+    const quantities=validate(()=>evidenceQuantities(b,delivery.delivered_kg));
+    const corrected={accepted_kg:quantities.accepted_kg,delivered_kg:quantities.delivered_kg,rejected_kg:b.rejected_kg==null?null:validate(()=>finiteKg(b.rejected_kg,{allowZero:true})),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
+    ensure(corrected.rate_inr==null||Number.isFinite(corrected.rate_inr)&&corrected.rate_inr>=0&&corrected.rate_inr<=1000000,'Invalid document rate.');
+    ensure(Number.isFinite(corrected.deductions_inr)&&corrected.deductions_inr>=0&&corrected.deductions_inr<=1000000,'Invalid deduction.');
+    const previous=JSON.parse(current.verified_json);
+    ensure(JSON.stringify(corrected)!==JSON.stringify(previous),'No evidence values changed.',409);
+    const version=insertEvidenceVersion(current,corrected,user.id,reason);
+    run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(corrected),current.id);
+    audit(user.id,'EVIDENCE_CORRECTED',current.id,{kind:current.kind,version_number:version.version_number,old_kg:previous.accepted_kg,new_kg:corrected.accepted_kg,reason,previous,corrected});
+    return {ok:true};
+   });
+   return reply(res,200,result);
   }
   if(m[2]==='file'&&method==='GET'){
    const data=await readFile(join(storageDir,evidence.file_path));res.writeHead(200,{'Content-Type':evidence.mime,'Content-Disposition':`inline; filename="${evidence.file_name.replace(/["\\]/g,'')}"`,'X-Content-Type-Options':'nosniff','Cache-Control':'private,no-store','Content-Security-Policy':'sandbox'});res.end(data);return;
