@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {matchStock,maxOffer,reconcile,heuristicTextExtract,finiteKg,moneyPaise,correctionReason} from '../lib/domain.mjs';
+import {matchStock,maxOffer,reconcile,heuristicTextExtract,finiteKg,moneyPaise,correctionReason,evidenceQuantities} from '../lib/domain.mjs';
 const lots=[{id:'LOT-001',crop:'Tomatoes',grade:'A',safety:'cleared',quantity_kg:30},{id:'LOT-002',crop:'Tomatoes',grade:'B',safety:'cleared',quantity_kg:40},{id:'LOT-003',crop:'Tomatoes',grade:'A',safety:'cleared',quantity_kg:25}];
 const original={id:'ORD-001',crop:'Tomatoes',grade:'A',quantity_kg:80,availability:'accepting'};
 const alt={id:'ORD-002',crop:'Tomatoes',grade:'B',quantity_kg:30,availability:'accepting'};
@@ -9,3 +9,4 @@ test('reconciliation computes the illustrative Rs 48 without AI calculations',()
 test('unit inputs reject negative and impossible values',()=>{assert.throws(()=>finiteKg(-5));assert.throws(()=>moneyPaise(NaN));});
 test('text parser extracts received evidence rather than defaulting to fixed values',()=>{const a=heuristicTextExtract('Lot: LOT-002\nAccepted: 28 kg\nRejected: 2 kg\nRate: 16');const b=heuristicTextExtract('Accepted: 21 kg');assert.equal(a.accepted_kg,28);assert.equal(b.accepted_kg,21);assert.equal(a.rejected_kg,2)});
 test('evidence correction reasons require at least 10 meaningful characters',()=>{assert.throws(()=>correctionReason('too short'),/between 10 and 1000/);assert.equal(correctionReason('  Receipt typo confirmed.  '),'Receipt typo confirmed.');});
+test('evidence accepted quantity cannot exceed delivered quantities',()=>{assert.deepEqual(evidenceQuantities({accepted_kg:28,delivered_kg:30},30),{accepted_kg:28,delivered_kg:30});assert.throws(()=>evidenceQuantities({accepted_kg:31,delivered_kg:30},35),/document delivered/);assert.throws(()=>evidenceQuantities({accepted_kg:31,delivered_kg:35},30),/recorded delivery/);});
