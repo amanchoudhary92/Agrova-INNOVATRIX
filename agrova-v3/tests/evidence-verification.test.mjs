@@ -108,6 +108,8 @@ test('manager correction uses a separate route and preserves before-and-after au
  const updated=(await api('GET','/api/bootstrap')).data;
  const settlement=updated.deliveries.find(item=>item.id===deliveryId);
  assert.equal(settlement.evidence.find(item=>item.id===buyerEvidence.id).verified.accepted_kg,27);
+ assert.deepEqual(settlement.evidence.find(item=>item.id===buyerEvidence.id).versions.map(item=>item.version_number),[2,1]);
+ assert.equal(settlement.evidence.find(item=>item.id===buyerEvidence.id).versions[0].current,true);
  assert.equal(settlement.reconciliation.disputed_paise,1600);
  assert.equal(settlement.settlement_status,'needs_review');
  const auditEvent=updated.events.find(event=>event.action==='EVIDENCE_CORRECTED'&&event.ref===buyerEvidence.id);
@@ -140,7 +142,10 @@ test('correction requires verified evidence and rejects stale snapshots',async()
  const second=await api('POST',path,{...inspection.verified,accepted_kg:26,reason:'Another inspection adjustment.',expected_verified_json:stale});
  assert.equal(second.status,409);
  const after=(await api('GET','/api/bootstrap')).data;
- assert.equal(after.deliveries.find(item=>item.id===deliveryId).evidence.find(item=>item.id===inspection.id).verified.accepted_kg,27);
+ const correctedDelivery=after.deliveries.find(item=>item.id===deliveryId);
+ assert.equal(correctedDelivery.evidence.find(item=>item.id===inspection.id).verified.accepted_kg,27);
+ assert.equal(correctedDelivery.reconciliation.disputed_paise,0);
+ assert.equal(correctedDelivery.settlement_status,'needs_review','a correction after review reopens even a zero-difference delivery');
  assert.equal(after.events.filter(event=>event.action==='EVIDENCE_CORRECTED'&&event.ref===inspection.id).length,1);
 });
 
@@ -158,4 +163,19 @@ test('repeat verify rejects both evidence kinds without changing verified values
  const unchanged=after.deliveries.find(item=>item.id===deliveryId);
  for(const {id,verified} of snapshots)assert.deepEqual(unchanged.evidence.find(item=>item.id===id).verified,verified);
  assert.equal(after.events.filter(event=>event.action==='EVIDENCE_VERIFIED').length,eventCount);
+});
+
+test('settlement reads newest version even if the legacy mirror becomes stale',async()=>{
+ const before=(await api('GET','/api/bootstrap')).data;
+ const buyer=before.deliveries.find(item=>item.id===deliveryId).evidence.find(item=>item.kind==='buyer'&&item.verified);
+ const history=new DatabaseSync(join(sandbox,'storage','agrova.sqlite'));
+ try{
+  history.prepare('UPDATE evidence SET verified_json=? WHERE id=?').run(JSON.stringify({...buyer.verified,accepted_kg:1}),buyer.id);
+  const delivery=(await api('GET','/api/bootstrap')).data.deliveries.find(item=>item.id===deliveryId);
+  assert.equal(delivery.evidence.find(item=>item.id===buyer.id).verified.accepted_kg,27);
+  assert.equal(delivery.reconciliation.buyer_kg,27);
+ }finally{
+  history.prepare('UPDATE evidence SET verified_json=? WHERE id=?').run(JSON.stringify(buyer.verified),buyer.id);
+  history.close();
+ }
 });

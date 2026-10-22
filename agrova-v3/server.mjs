@@ -6,7 +6,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash,withWorkspace,workspaceFor} from './lib/db.mjs';
 import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract,correctionReason,evidenceQuantities} from './lib/domain.mjs';
 import {freeQuantity,orderCoverage,netRecovery,qualityCheck} from './lib/v3.mjs';
-import {latestEvidenceVersion,insertEvidenceVersion} from './lib/evidence-versions.mjs';
+import {latestEvidenceVersion,listEvidenceVersions,insertEvidenceVersion} from './lib/evidence-versions.mjs';
 const publicDir=resolve('public');const storageDir=resolve('storage');
 const error=(message,code=400)=>Object.assign(new Error(message),{status:code});
 const ensure=(condition,message,code=400)=>{if(!condition)throw error(message,code)};
@@ -27,9 +27,13 @@ const manager=(user)=>{requireUser(user);ensure(user.role==='manager','FPO manag
 const canViewDelivery=(user,d)=>{manager(user);return d};
 function breakdown(delivery){
  const docs=sql('SELECT * FROM evidence WHERE delivery_id=? ORDER BY created_at DESC,id DESC',delivery.id);
- const verified=kind=>docs.find(d=>d.kind===kind && d.verified_json)?.verified_json;
- const ins=verified('inspection')?JSON.parse(verified('inspection')):null;
- const buyer=verified('buyer')?JSON.parse(verified('buyer')):null;
+ const evidence=docs.map(({file_path,...doc})=>{
+  const versions=listEvidenceVersions(doc.id).map((version,index)=>({version_number:version.version_number,reason:version.reason,manager_id:version.manager_id,created_at:version.created_at,verified:JSON.parse(version.verified_json),current:index===0}));
+  return {...doc,proposed:parseJSON(doc.proposed_json),verified:versions[0]?.verified||null,versions};
+ });
+ const verified=kind=>evidence.find(d=>d.kind===kind && d.verified)?.verified||null;
+ const ins=verified('inspection');
+ const buyer=verified('buyer');
  const offer=row('offers',delivery.offer_id);
  const rate=offer.agreed_price_paise;
  const rec=reconcile(ins?.accepted_kg??delivery.accepted_kg,buyer?.accepted_kg??null,rate,ins?.deductions_inr!=null?moneyPaise(ins.deductions_inr):0);
@@ -38,8 +42,9 @@ function breakdown(delivery){
  const inspectionConflict=ins!=null && Math.abs(ins.accepted_kg-delivery.accepted_kg)>0.0001;
  const reviewEvent=latest?one("SELECT rowid FROM events WHERE action='REVIEW_RECORDED' AND ref=? ORDER BY rowid DESC LIMIT 1",latest.id):null;
  const verifiedAfterReview=reviewEvent ? !!one("SELECT id FROM events WHERE rowid>? AND action IN ('EVIDENCE_VERIFIED','EVIDENCE_CORRECTED') AND ref IN (SELECT id FROM evidence WHERE delivery_id=?) LIMIT 1",reviewEvent.rowid,delivery.id) : false;
- const settlement_status=latest&&!verifiedAfterReview?(latest.decision==='more_evidence'?'more_evidence':'reviewed_unpaid'):(inspectionConflict||rec.difference_kg!=null&&rec.difference_kg!==0?'needs_review':'awaiting_buyer_evidence');
- return {...delivery,offer,inspection_document_kg:ins?.accepted_kg??null,buyer_document_kg:buyer?.accepted_kg??null,inspection_conflict:inspectionConflict,reconciliation:rec,settlement_status,latest_review:latest,evidence:docs.map(({file_path,...d})=>({...d,proposed:parseJSON(d.proposed_json),verified:parseJSON(d.verified_json)}))};
+ const correctionAfterReview=reviewEvent ? !!one("SELECT id FROM events WHERE rowid>? AND action='EVIDENCE_CORRECTED' AND ref IN (SELECT id FROM evidence WHERE delivery_id=?) LIMIT 1",reviewEvent.rowid,delivery.id) : false;
+ const settlement_status=correctionAfterReview?'needs_review':latest&&!verifiedAfterReview?(latest.decision==='more_evidence'?'more_evidence':'reviewed_unpaid'):(inspectionConflict||rec.difference_kg!=null&&rec.difference_kg!==0?'needs_review':'awaiting_buyer_evidence');
+ return {...delivery,offer,inspection_document_kg:ins?.accepted_kg??null,buyer_document_kg:buyer?.accepted_kg??null,inspection_conflict:inspectionConflict,reconciliation:rec,settlement_status,latest_review:latest,evidence};
 }
 const parseJSON=v=>{try{return JSON.parse(v)}catch{return null}};
 function bootstrap(user){requireUser(user);
