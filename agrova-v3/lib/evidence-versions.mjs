@@ -9,6 +9,20 @@ const kgOrNull=(value)=>{const n=numberOrNull(value);return n==null?null:roundKg
 
 export function listEvidenceVersions(evidenceId){return sql('SELECT * FROM evidence_versions WHERE evidence_id=? ORDER BY version_number ASC',evidenceId);}
 
+// The newest version is resolved by version_number, never by insertion order.
+export function latestEvidenceVersion(evidenceId){return one('SELECT * FROM evidence_versions WHERE evidence_id=? ORDER BY version_number DESC LIMIT 1',evidenceId)||null;}
+
+// Single entry point for callers: the first verification becomes version 1,
+// every later verification is appended as a correction.
+export function recordEvidenceVerification(evidence,verified,verified_by='system',options={}){
+ const correction_reason=options.correction_reason??null;
+ return transactionSafe(()=>{
+  const existing=one('SELECT version_number FROM evidence_versions WHERE evidence_id=? ORDER BY version_number DESC LIMIT 1',evidence.id);
+  if(!existing)return createInitialEvidenceVersion(evidence,verified,verified_by);
+  return appendEvidenceCorrection(evidence,verified,verified_by,{correction_reason});
+ });
+}
+
 export function normalizeVerified(verified){
  const accepted=kgOrNull(verified?.accepted_kg);
  if(accepted==null||accepted<0)throw new Error('Enter a valid accepted quantity (kg).');
