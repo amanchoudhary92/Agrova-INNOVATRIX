@@ -9,6 +9,18 @@ export function moneyPaise(x) {
   if(!Number.isFinite(n) || n<0 || n>100000000) throw new Error('Invalid INR amount.');
   return Math.round(n*100);
 }
+export function correctionReason(value){
+ const reason=String(value??'').trim();
+ if(reason.length<10||reason.length>1000)throw new Error('Correction reason must be between 10 and 1000 characters.');
+ return reason;
+}
+export function evidenceQuantities(data,recordedDeliveredKg){
+ const accepted_kg=finiteKg(data?.accepted_kg,{allowZero:true});
+ const delivered_kg=data?.delivered_kg==null||data.delivered_kg===''?null:finiteKg(data.delivered_kg,{allowZero:true});
+ if(delivered_kg!=null&&accepted_kg>delivered_kg)throw new Error('Accepted quantity cannot exceed document delivered quantity.');
+ if(recordedDeliveredKg!=null&&accepted_kg>finiteKg(recordedDeliveredKg,{allowZero:true}))throw new Error('Accepted quantity cannot exceed recorded delivery.');
+ return {accepted_kg,delivered_kg};
+}
 export function mismatch(required,eligible){return Math.max(0,roundKg(Number(required)-Number(eligible)));}
 export function canUseLot(lot,order){return lot.crop.toLowerCase().trim()===order.crop.toLowerCase().trim() && lot.grade===order.grade && lot.safety==='cleared';}
 export function matchStock(lots,order,allocations=[]){
