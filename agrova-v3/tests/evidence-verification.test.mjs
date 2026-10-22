@@ -108,3 +108,19 @@ test('manager correction uses a separate route and preserves before-and-after au
  assert.equal(JSON.parse(auditEvent.detail).reason,fields.reason);
  assert.equal((await api('POST',path,fields)).status,409);
 });
+
+test('repeat verify rejects both evidence kinds without changing verified values or events',async()=>{
+ const before=(await api('GET','/api/bootstrap')).data;
+ const delivery=before.deliveries.find(item=>item.id===deliveryId);
+ const snapshots=delivery.evidence.map(item=>({id:item.id,verified:item.verified}));
+ const eventCount=before.events.filter(event=>event.action==='EVIDENCE_VERIFIED').length;
+ for(const {id} of snapshots){
+  const repeat=await api('POST',`/api/evidence/${id}/verify`,{accepted_kg:1,delivered_kg:30,rate_inr:16});
+  assert.equal(repeat.status,409);
+  assert.match(repeat.data.error,/already verified/);
+ }
+ const after=(await api('GET','/api/bootstrap')).data;
+ const unchanged=after.deliveries.find(item=>item.id===deliveryId);
+ for(const {id,verified} of snapshots)assert.deepEqual(unchanged.evidence.find(item=>item.id===id).verified,verified);
+ assert.equal(after.events.filter(event=>event.action==='EVIDENCE_VERIFIED').length,eventCount);
+});

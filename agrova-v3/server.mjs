@@ -267,7 +267,13 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
   if(m[2]==='verify'&&method==='POST'){
    const b=await bodyJson(req);const accepted=finiteKg(b.accepted_kg,{allowZero:true});const d=row('deliveries',evidence.delivery_id);ensure(accepted<=d.delivered_kg,'Accepted quantity cannot exceed delivered.');const verified={accepted_kg:accepted,delivered_kg:b.delivered_kg==null?null:finiteKg(b.delivered_kg,{allowZero:true}),rejected_kg:b.rejected_kg==null?null:finiteKg(b.rejected_kg,{allowZero:true}),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
    ensure(Number.isFinite(verified.deductions_inr)&&verified.deductions_inr>=0&&verified.deductions_inr<=1000000,'Invalid deduction.');
-   return reply(res,200,transaction(()=>{run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),evidence.id);audit(user.id,'EVIDENCE_VERIFIED',evidence.id,{accepted,kind:evidence.kind});return {ok:true};}));
+   return reply(res,200,transaction(()=>{
+    const current=row('evidence',evidence.id);
+    ensure(!current.verified_json,'Evidence is already verified. Use Correct with a reason.',409);
+    run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),current.id);
+    audit(user.id,'EVIDENCE_VERIFIED',current.id,{accepted,kind:current.kind});
+    return {ok:true};
+   }));
   }
   if(m[2]==='correct'&&method==='POST'){
    const b=await bodyJson(req);const reason=validate(()=>correctionReason(b.reason));
