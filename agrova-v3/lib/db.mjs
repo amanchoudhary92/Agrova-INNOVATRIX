@@ -13,6 +13,30 @@ export const sql=(query,...params)=>contextDb().prepare(query).all(...params);
 export const one=(query,...params)=>contextDb().prepare(query).get(...params);
 export const run=(query,...params)=>contextDb().prepare(query).run(...params);
 export function transaction(fn){const database=contextDb();database.exec('BEGIN IMMEDIATE');try{const v=fn();database.exec('COMMIT');return v;}catch(e){database.exec('ROLLBACK');throw e;}}
+// Lets a helper reuse the caller's transaction instead of failing on a nested BEGIN.
+export function inTransaction(){const database=contextDb();return typeof database.isTransaction==='boolean'?database.isTransaction:false;}
+export function transactionSafe(fn){return inTransaction()?fn():transaction(fn);}
+// Append-only evidence history: one immutable row per verification of an evidence document.
+const EVIDENCE_VERSIONS_DDL=`
+CREATE TABLE IF NOT EXISTS evidence_versions(
+ id TEXT PRIMARY KEY,
+ evidence_id TEXT NOT NULL REFERENCES evidence(id),
+ version_number INTEGER NOT NULL CHECK(version_number>=1),
+ kind TEXT NOT NULL CHECK(kind IN ('inspection','buyer')),
+ accepted_kg REAL NOT NULL CHECK(accepted_kg>=0),
+ delivered_kg REAL,
+ rejected_kg REAL,
+ rate_inr REAL,
+ deductions_inr REAL NOT NULL DEFAULT 0 CHECK(deductions_inr>=0),
+ lot_ref TEXT,
+ source_reference TEXT,
+ correction_reason TEXT,
+ verified_by TEXT NOT NULL,
+ verified_json TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ UNIQUE(evidence_id,version_number));
+CREATE INDEX IF NOT EXISTS idx_evidence_versions_evidence ON evidence_versions(evidence_id,version_number);
+`;
 const workspaces=new Map();
 export function workspaceFor(fpoId){
  if(!/^[a-f0-9-]{36}$/.test(fpoId))throw Error('Invalid FPO identifier');
@@ -23,6 +47,8 @@ export function workspaceFor(fpoId){
  // Schema only: no sample farmers, orders, credentials or other FPO data crosses workspaces.
  const definitions=db.prepare("SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END").all();
  for(const {sql:ddl} of definitions)tenant.exec(ddl);
+ // Tenants created before evidence versioning existed still need the additive history table.
+ tenant.exec(EVIDENCE_VERSIONS_DDL);
  workspaces.set(fpoId,tenant);
  return tenant;
 }
@@ -46,6 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_offers_lot ON offers(lot_id,status);
 CREATE INDEX IF NOT EXISTS idx_offers_order ON offers(order_id,status);
 CREATE INDEX IF NOT EXISTS idx_evidence_delivery ON evidence(delivery_id);
 `);
+db.exec(EVIDENCE_VERSIONS_DDL);
 db.exec(`
 CREATE TABLE IF NOT EXISTS supplier_quotes(
  id TEXT PRIMARY KEY, original_order_id TEXT NOT NULL REFERENCES orders(id), supplier_name TEXT NOT NULL,
@@ -78,7 +105,7 @@ for(const [name,ddl] of [
 ]){if(!db.prepare('PRAGMA table_info(orders)').all().some(col=>col.name===name))db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${ddl}`);}
 export function audit(actor,action,ref,detail={}){run('INSERT INTO events VALUES(?,?,?,?,?,?)',nextId('event','EVT'),actor,action,ref,JSON.stringify(detail),new Date().toISOString());}
 export function seedDemo(){return transaction(()=>{
- for(const table of ['original_allocations','supplier_quotes','reviews','evidence','deliveries','offers','cases','orders','lots','farmers','events','counters'])run('DELETE FROM '+table);
+  for(const table of ['original_allocations','supplier_quotes','reviews','evidence_versions','evidence','deliveries','offers','cases','orders','lots','farmers','events','counters'])run('DELETE FROM '+table);
  const now=new Date().toISOString();
  for(const [id,name,quantity,grade,index] of [['LOT-001','Asha Devi',30,'A',1],['LOT-002','Ravi Kumar',40,'B',2],['LOT-003','Meena Singh',25,'A',3]]){
   const fid='FARM-'+String(index).padStart(3,'0');
@@ -95,7 +122,7 @@ export function seedDemo(){return transaction(()=>{
   ['SRC-002','Greenfields Partner FPO','Ghaziabad, Uttar Pradesh',10,2250,4500,500]
  ])run('INSERT INTO supplier_quotes(id,original_order_id,supplier_name,location,crop,grade,offered_kg,unit_price_paise,transport_paise,handling_paise,source_reference,status,received_kg,received_lot_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,'ORD-001',supplier,location,'Tomatoes','A',qty,rate,transport,handling,'ILLUSTRATIVE_PARTNER_QUOTE','quoted',null,null,now);
  
- for(const [a,b] of [['farmer',4],['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
+  for(const [a,b] of [['farmer',4],['lot',4],['order',4],['case',2],['offer',1],['delivery',1],['evidence',1],['evidence_version',1],['review',1],['event',1],['source',3],['allocation',1]])run('INSERT INTO counters VALUES(?,?)',a,b);
  audit('system','DEMO_RESET','CASE-001',{note:'Illustrative tomato pilot: quantities and prices are sample data.'});
  });}
 if(!one('SELECT id FROM users LIMIT 1')){
