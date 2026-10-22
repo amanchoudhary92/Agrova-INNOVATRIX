@@ -4,11 +4,12 @@ import {existsSync} from 'node:fs';
 import {join,resolve,extname} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash,withWorkspace,workspaceFor} from './lib/db.mjs';
-import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract} from './lib/domain.mjs';
+import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract,correctionReason,evidenceQuantities} from './lib/domain.mjs';
 import {freeQuantity,orderCoverage,netRecovery,qualityCheck} from './lib/v3.mjs';
 const publicDir=resolve('public');const storageDir=resolve('storage');
 const error=(message,code=400)=>Object.assign(new Error(message),{status:code});
 const ensure=(condition,message,code=400)=>{if(!condition)throw error(message,code)};
+const validate=(fn)=>{try{return fn();}catch(e){throw error(e.message);}};
 const allowedGrade=['A','B','C'];const allowedSafety=['cleared','hold','pending'];
 const now=()=>new Date().toISOString();
 const str=(v,max=140)=>{const s=String(v??'').trim();ensure(s.length>0&&s.length<=max,'Required text is missing or too long.');return s};
@@ -34,7 +35,8 @@ function breakdown(delivery){
  const reviews=sql('SELECT * FROM reviews WHERE delivery_id=? ORDER BY created_at DESC,id DESC',delivery.id);
  const latest=reviews[0]||null;
  const inspectionConflict=ins!=null && Math.abs(ins.accepted_kg-delivery.accepted_kg)>0.0001;
- const verifiedAfterReview=latest ? sql("SELECT id FROM events WHERE action='EVIDENCE_VERIFIED' AND created_at >= ? AND ref IN (SELECT id FROM evidence WHERE delivery_id=?)",latest.created_at,delivery.id).some(e=>{const ev=one('SELECT created_at FROM events WHERE id=?',e.id);return ev?.created_at>latest.created_at;}) : false;
+ const reviewEvent=latest?one("SELECT rowid FROM events WHERE action='REVIEW_RECORDED' AND ref=? ORDER BY rowid DESC LIMIT 1",latest.id):null;
+ const verifiedAfterReview=reviewEvent ? !!one("SELECT id FROM events WHERE rowid>? AND action IN ('EVIDENCE_VERIFIED','EVIDENCE_CORRECTED') AND ref IN (SELECT id FROM evidence WHERE delivery_id=?) LIMIT 1",reviewEvent.rowid,delivery.id) : false;
  const settlement_status=latest&&!verifiedAfterReview?(latest.decision==='more_evidence'?'more_evidence':'reviewed_unpaid'):(inspectionConflict||rec.difference_kg!=null&&rec.difference_kg!==0?'needs_review':'awaiting_buyer_evidence');
  return {...delivery,offer,inspection_document_kg:ins?.accepted_kg??null,buyer_document_kg:buyer?.accepted_kg??null,inspection_conflict:inspectionConflict,reconciliation:rec,settlement_status,latest_review:latest,evidence:docs.map(({file_path,...d})=>({...d,proposed:parseJSON(d.proposed_json),verified:parseJSON(d.verified_json)}))};
 }
@@ -258,7 +260,7 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
   const diskName=randomUUID()+'.bin';await writeFile(join(storageDir,diskName),raw,{flag:'wx'});
   return reply(res,201,transaction(()=>{const id=nextId('evidence','EVD');run('INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?,?,?)',id,b.delivery_id,kind,fileName,mime,diskName,null,null,'pending',now());audit(user.id,'EVIDENCE_UPLOADED',id,{kind,fileName});return {id};}));
  }
- m=path.match(/^\/api\/evidence\/(EVD-\d+)\/(extract|verify|file)$/);
+ m=path.match(/^\/api\/evidence\/(EVD-\d+)\/(extract|verify|correct|file)$/);
  if(m){manager(user);const evidence=row('evidence',m[1]);if(m[2]==='extract'&&method==='POST'){
    const output=await extractEvidence(evidence);transaction(()=>{run('UPDATE evidence SET proposed_json=?,engine=? WHERE id=?',JSON.stringify(output.fields),output.engine,evidence.id);audit(user.id,'EXTRACTION_PROPOSED',evidence.id,{engine:output.engine});});return reply(res,200,output);
   }
@@ -266,6 +268,24 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
    const b=await bodyJson(req);const accepted=finiteKg(b.accepted_kg,{allowZero:true});const d=row('deliveries',evidence.delivery_id);ensure(accepted<=d.delivered_kg,'Accepted quantity cannot exceed delivered.');const verified={accepted_kg:accepted,delivered_kg:b.delivered_kg==null?null:finiteKg(b.delivered_kg,{allowZero:true}),rejected_kg:b.rejected_kg==null?null:finiteKg(b.rejected_kg,{allowZero:true}),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
    ensure(Number.isFinite(verified.deductions_inr)&&verified.deductions_inr>=0&&verified.deductions_inr<=1000000,'Invalid deduction.');
    return reply(res,200,transaction(()=>{run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),evidence.id);audit(user.id,'EVIDENCE_VERIFIED',evidence.id,{accepted,kind:evidence.kind});return {ok:true};}));
+  }
+  if(m[2]==='correct'&&method==='POST'){
+   const b=await bodyJson(req);const reason=validate(()=>correctionReason(b.reason));
+   const result=transaction(()=>{
+    const current=row('evidence',evidence.id);
+    ensure(current.verified_json,'Verify evidence before correcting it.',409);
+    const delivery=row('deliveries',current.delivery_id);
+    const quantities=validate(()=>evidenceQuantities(b,delivery.delivered_kg));
+    const corrected={accepted_kg:quantities.accepted_kg,delivered_kg:quantities.delivered_kg,rejected_kg:b.rejected_kg==null?null:validate(()=>finiteKg(b.rejected_kg,{allowZero:true})),rate_inr:b.rate_inr==null?null:Number(b.rate_inr),deductions_inr:b.deductions_inr==null?0:Number(b.deductions_inr),lot_ref:String(b.lot_ref||'').slice(0,50),source_reference:String(b.source_reference||'').slice(0,220)};
+    ensure(corrected.rate_inr==null||Number.isFinite(corrected.rate_inr)&&corrected.rate_inr>=0&&corrected.rate_inr<=1000000,'Invalid document rate.');
+    ensure(Number.isFinite(corrected.deductions_inr)&&corrected.deductions_inr>=0&&corrected.deductions_inr<=1000000,'Invalid deduction.');
+    const previous=JSON.parse(current.verified_json);
+    ensure(JSON.stringify(corrected)!==JSON.stringify(previous),'No evidence values changed.',409);
+    run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(corrected),current.id);
+    audit(user.id,'EVIDENCE_CORRECTED',current.id,{kind:current.kind,reason,previous,corrected});
+    return {ok:true};
+   });
+   return reply(res,200,result);
   }
   if(m[2]==='file'&&method==='GET'){
    const data=await readFile(join(storageDir,evidence.file_path));res.writeHead(200,{'Content-Type':evidence.mime,'Content-Disposition':`inline; filename="${evidence.file_name.replace(/["\\]/g,'')}"`,'X-Content-Type-Options':'nosniff','Cache-Control':'private,no-store','Content-Security-Policy':'sandbox'});res.end(data);return;

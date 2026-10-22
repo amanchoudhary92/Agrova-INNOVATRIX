@@ -80,3 +80,31 @@ test('initial verification persists inspection and buyer evidence for reconcilia
  const verificationEvents=bootstrap.data.events.filter(event=>event.action==='EVIDENCE_VERIFIED'&&verified.some(item=>item.id===event.ref));
  assert.equal(verificationEvents.length,2);
 });
+
+test('manager correction uses a separate route and preserves before-and-after audit values',async()=>{
+ const initial=(await api('GET','/api/bootstrap')).data;
+ const delivery=initial.deliveries.find(item=>item.id===deliveryId);
+ const buyerEvidence=delivery.evidence.find(item=>item.kind==='buyer');
+ const path=`/api/evidence/${buyerEvidence.id}/correct`;
+ const fields={...buyerEvidence.verified,accepted_kg:27,reason:'Buyer receipt transcription fixed.'};
+ const review=await api('POST','/api/reviews',{delivery_id:deliveryId,decision:'more_evidence',note:'Check the original buyer statement.'});
+ assert.equal(review.status,201);
+ assert.equal((await api('POST',path,{...fields,reason:'short'})).status,400);
+ assert.equal((await api('POST',path,{...fields,accepted_kg:31})).status,400);
+ const buyerLogin=await api('POST','/api/auth/login',{username:'sauce@agrova.test',password:'Buyer123!'},null);
+ assert.equal(buyerLogin.status,200);
+ assert.equal((await api('POST',path,fields,buyerLogin.cookie)).status,403);
+ const corrected=await api('POST',path,fields);
+ assert.equal(corrected.status,200);
+ assert.equal(corrected.data.ok,true);
+ const updated=(await api('GET','/api/bootstrap')).data;
+ const settlement=updated.deliveries.find(item=>item.id===deliveryId);
+ assert.equal(settlement.evidence.find(item=>item.id===buyerEvidence.id).verified.accepted_kg,27);
+ assert.equal(settlement.reconciliation.disputed_paise,1600);
+ assert.equal(settlement.settlement_status,'needs_review');
+ const auditEvent=updated.events.find(event=>event.action==='EVIDENCE_CORRECTED'&&event.ref===buyerEvidence.id);
+ assert.equal(JSON.parse(auditEvent.detail).previous.accepted_kg,25);
+ assert.equal(JSON.parse(auditEvent.detail).corrected.accepted_kg,27);
+ assert.equal(JSON.parse(auditEvent.detail).reason,fields.reason);
+ assert.equal((await api('POST',path,fields)).status,409);
+});
