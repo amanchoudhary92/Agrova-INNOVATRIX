@@ -33,6 +33,30 @@ CREATE TRIGGER IF NOT EXISTS evidence_versions_no_update BEFORE UPDATE ON eviden
 CREATE TRIGGER IF NOT EXISTS evidence_versions_no_delete BEFORE DELETE ON evidence_versions
  BEGIN SELECT RAISE(ABORT,'Evidence versions are append-only.'); END;
 `;
+const parsed=value=>{try{return JSON.parse(value);}catch{return null;}};
+export function migrateEvidenceVersions(connection=db){return withWorkspace(connection,()=>transaction(()=>{
+ const legacy=sql("SELECT e.* FROM evidence e WHERE e.verified_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM evidence_versions v WHERE v.evidence_id=e.id)");
+ for(const evidence of legacy){
+  const current=parsed(evidence.verified_json);
+  if(!current||typeof current!=='object')throw Error(`Invalid verified JSON for ${evidence.id}. Migration stopped without changes.`);
+  const verified=one("SELECT actor_id,created_at FROM events WHERE action='EVIDENCE_VERIFIED' AND ref=? ORDER BY rowid ASC LIMIT 1",evidence.id);
+  const events=sql("SELECT actor_id,created_at,detail FROM events WHERE action='EVIDENCE_CORRECTED' AND ref=? ORDER BY rowid ASC",evidence.id);
+  const firstDetail=parsed(events[0]?.detail);
+  const first=firstDetail?.previous&&typeof firstDetail.previous==='object'?firstDetail.previous:current;
+  let version=1,previous=first;
+  run('INSERT INTO evidence_versions VALUES(?,?,?,?,?,?,?)',evidence.id,version,evidence.kind,JSON.stringify(first),null,verified?.actor_id||'legacy-unknown',verified?.created_at||evidence.created_at);
+  for(const event of events){
+   const detail=parsed(event.detail);
+   if(!detail?.corrected||!detail?.previous||JSON.stringify(detail.previous)!==JSON.stringify(previous))break;
+   previous=detail.corrected;
+   run('INSERT INTO evidence_versions VALUES(?,?,?,?,?,?,?)',evidence.id,++version,evidence.kind,JSON.stringify(previous),String(detail.reason||'Legacy correction (reason unavailable)'),event.actor_id,event.created_at);
+  }
+  if(JSON.stringify(previous)!==JSON.stringify(current)){
+   run('INSERT INTO evidence_versions VALUES(?,?,?,?,?,?,?)',evidence.id,++version,evidence.kind,JSON.stringify(current),'Legacy current snapshot (audit gap)',events.at(-1)?.actor_id||verified?.actor_id||'legacy-unknown',new Date().toISOString());
+  }
+ }
+ return legacy.length;
+}));}
 export function workspaceFor(fpoId){
  const id=String(fpoId||'').toLowerCase();
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))throw Error('Invalid FPO workspace ID.');
@@ -50,6 +74,7 @@ export function workspaceFor(fpoId){
  for(const [name,ddl] of [['transport_paise','INTEGER NOT NULL DEFAULT 0'],['handling_paise','INTEGER NOT NULL DEFAULT 0']]){
   if(!connection.prepare('PRAGMA table_info(orders)').all().some(x=>x.name===name))connection.exec(`ALTER TABLE orders ADD COLUMN ${name} ${ddl}`);
  }
+ migrateEvidenceVersions(connection);
  workspaceConnections.set(id,connection);return connection;
 }
 export function hashPassword(p){const salt=randomBytes(16).toString('hex');return salt+':'+scryptSync(p,salt,64).toString('hex')}
@@ -75,6 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_offers_order ON offers(order_id,status);
 CREATE INDEX IF NOT EXISTS idx_evidence_delivery ON evidence(delivery_id);
 `);
 db.exec(evidenceVersionsSchema);
+migrateEvidenceVersions(db);
 db.exec(`
 CREATE TABLE IF NOT EXISTS supplier_quotes(
  id TEXT PRIMARY KEY, original_order_id TEXT NOT NULL REFERENCES orders(id), supplier_name TEXT NOT NULL,
