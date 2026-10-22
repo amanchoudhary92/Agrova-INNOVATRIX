@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import net from 'node:net';
+import {DatabaseSync} from 'node:sqlite';
 
 const project=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const sandbox=mkdtempSync(join(tmpdir(),'agrova-evidence-test-'));
@@ -13,6 +14,7 @@ let server;
 let base;
 let managerCookie;
 let deliveryId;
+const versionsFor=id=>{const history=new DatabaseSync(join(sandbox,'storage','agrova.sqlite'));try{return history.prepare('SELECT * FROM evidence_versions WHERE evidence_id=? ORDER BY version_number').all(id);}finally{history.close();}};
 
 const freePort=()=>new Promise((resolvePort,reject)=>{
  const socket=net.createServer();
@@ -76,6 +78,12 @@ test('initial verification persists inspection and buyer evidence for reconcilia
   assert.equal(evidence.kind,expected.kind);
   assert.equal(evidence.verified.accepted_kg,expected.accepted);
   assert.equal(evidence.verified.delivered_kg,30);
+  const versions=versionsFor(expected.id);
+  assert.equal(versions.length,1);
+  assert.equal(versions[0].version_number,1);
+  assert.equal(versions[0].reason,null);
+  assert.equal(versions[0].manager_id,'USR-001');
+  assert.deepEqual(JSON.parse(versions[0].verified_json),evidence.verified);
  }
  const verificationEvents=bootstrap.data.events.filter(event=>event.action==='EVIDENCE_VERIFIED'&&verified.some(item=>item.id===event.ref));
  assert.equal(verificationEvents.length,2);
@@ -106,6 +114,13 @@ test('manager correction uses a separate route and preserves before-and-after au
  assert.equal(JSON.parse(auditEvent.detail).previous.accepted_kg,25);
  assert.equal(JSON.parse(auditEvent.detail).corrected.accepted_kg,27);
  assert.equal(JSON.parse(auditEvent.detail).reason,fields.reason);
+ assert.equal(JSON.parse(auditEvent.detail).old_kg,25);
+ assert.equal(JSON.parse(auditEvent.detail).new_kg,27);
+ const versions=versionsFor(buyerEvidence.id);
+ assert.deepEqual(versions.map(item=>item.version_number),[1,2]);
+ assert.equal(JSON.parse(versions[0].verified_json).accepted_kg,25);
+ assert.equal(JSON.parse(versions[1].verified_json).accepted_kg,27);
+ assert.equal(versions[1].reason,fields.reason);
  assert.equal((await api('POST',path,fields)).status,409);
 });
 

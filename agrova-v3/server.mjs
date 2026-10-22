@@ -6,6 +6,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {db,sql,one,run,transaction,nextId,audit,seedDemo,comparePassword,tokenHash,withWorkspace,workspaceFor} from './lib/db.mjs';
 import {finiteKg,moneyPaise,maxOffer,matchStock,reconcile,heuristicTextExtract,correctionReason,evidenceQuantities} from './lib/domain.mjs';
 import {freeQuantity,orderCoverage,netRecovery,qualityCheck} from './lib/v3.mjs';
+import {latestEvidenceVersion,insertEvidenceVersion} from './lib/evidence-versions.mjs';
 const publicDir=resolve('public');const storageDir=resolve('storage');
 const error=(message,code=400)=>Object.assign(new Error(message),{status:code});
 const ensure=(condition,message,code=400)=>{if(!condition)throw error(message,code)};
@@ -270,8 +271,10 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
    return reply(res,200,transaction(()=>{
     const current=row('evidence',evidence.id);
     ensure(!current.verified_json,'Evidence is already verified. Use Correct with a reason.',409);
+    ensure(!latestEvidenceVersion(current.id),'Evidence is already verified. Use Correct with a reason.',409);
+    const version=insertEvidenceVersion(current,verified,user.id);
     run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(verified),current.id);
-    audit(user.id,'EVIDENCE_VERIFIED',current.id,{accepted,kind:current.kind});
+    audit(user.id,'EVIDENCE_VERIFIED',current.id,{accepted,kind:current.kind,version_number:version.version_number});
     return {ok:true};
    }));
   }
@@ -280,6 +283,8 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
    const result=transaction(()=>{
     const current=row('evidence',evidence.id);
     ensure(current.verified_json,'Verify evidence before correcting it.',409);
+    const latest=latestEvidenceVersion(current.id);
+    ensure(latest&&latest.verified_json===current.verified_json,'Verified evidence history is out of sync. Refresh before correcting.',409);
     ensure(b.expected_verified_json===current.verified_json,'Evidence changed since this form opened. Refresh and review the latest values.',409);
     const delivery=row('deliveries',current.delivery_id);
     const quantities=validate(()=>evidenceQuantities(b,delivery.delivered_kg));
@@ -288,8 +293,9 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');con
     ensure(Number.isFinite(corrected.deductions_inr)&&corrected.deductions_inr>=0&&corrected.deductions_inr<=1000000,'Invalid deduction.');
     const previous=JSON.parse(current.verified_json);
     ensure(JSON.stringify(corrected)!==JSON.stringify(previous),'No evidence values changed.',409);
+    const version=insertEvidenceVersion(current,corrected,user.id,reason);
     run('UPDATE evidence SET verified_json=? WHERE id=?',JSON.stringify(corrected),current.id);
-    audit(user.id,'EVIDENCE_CORRECTED',current.id,{kind:current.kind,reason,previous,corrected});
+    audit(user.id,'EVIDENCE_CORRECTED',current.id,{kind:current.kind,version_number:version.version_number,old_kg:previous.accepted_kg,new_kg:corrected.accepted_kg,reason,previous,corrected});
     return {ok:true};
    });
    return reply(res,200,result);
